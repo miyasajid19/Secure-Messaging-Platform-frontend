@@ -4,34 +4,39 @@
  * Right pane (flex-1): header for the active conversation, scrollable
  * message area, composer pinned at the bottom.
  *
- * Phase 4: messages come from `useQuery(['messages', id])`. The
- * conversation metadata (avatar, name, etc.) comes from the
- * `['conversations']` cache that the list pane populated — we don't
- * refetch here.
- *
- * Phase 3's local optimistic-append + simulated `setTimeout`
- * progression are kept verbatim. Phase 5 swaps them for real WS
- * events; that's a small surgical edit.
+ * Phase 5:
+ *   - Read-on-open: when `conversationId` changes, find the latest
+ *     message id and POST `/read`. The WS then carries a
+ *     `message.read.bulk` to the sender, and we invalidate the
+ *     conversation list so the badge clears.
+ *   - Typing indicator: subtitle shows "X is typing…" when the
+ *     realtime store's `typingByConversation[id]` contains anyone
+ *     other than the current user.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Phone, Search, Video } from "lucide-react";
+import { toast } from "sonner";
 import { EmptyState } from "./empty-state";
 import { MessageSquareText } from "lucide-react";
 import { MessageBubble } from "./message-bubble";
 import { Composer } from "./composer";
 import { Avatar } from "./avatar";
 import {
-  type Conversation,
-  type Message,
   getMe,
   listConversations,
   listMessages,
+  markRead,
   queryKeys,
+  sendMessage,
+  type Conversation,
+  type Message,
 } from "@/lib/api";
+import { getQueryClient } from "@/lib/api";
 import { useUiStore } from "@/store/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@/store/auth";
+import { useRealtimeStore } from "@/store/realtime";
 
 interface Props {
   /** On mobile this component is hidden unless conversationId is set. */
@@ -42,6 +47,30 @@ interface Props {
 export function ChatPane({ showBackButton = false, onBack }: Props) {
   const conversationId = useUiStore((s) => s.selectedConversationId);
   const storedUser = useAuthStore((s) => s.user);
+  const typingByConversation = useRealtimeStore((s) => s.typingByConversation);
+  const presenceByUser = useRealtimeStore((s) => s.presenceByUser);
+
+  // Read-on-open: when a conversation is selected, post /read for the
+  // latest message id. This both clears the unread badge via the
+  // backend's `message.read.bulk` event and tells the server the user
+  // is "caught up" so future sends get a 'read' tick.
+  useEffect(() => {
+    if (conversationId == null) return;
+    const qc = getQueryClient();
+    const msgs = qc.getQueryData<Message[]>(queryKeys.messages(conversationId)) ?? [];
+    if (msgs.length === 0) return;
+    const latestId = msgs.reduce((max, m) => (m.id > max ? m.id : max), 0);
+    if (!latestId) return;
+    // Fire and forget.
+    void markRead(conversationId, latestId)
+      .then(() => {
+        void qc.invalidateQueries({ queryKey: queryKeys.conversations });
+      })
+      .catch(() => {
+        // If the request fails we still get a graceful read-of-messages
+        // when the WS pushes message.read.bulk later.
+      });
+  }, [conversationId]);
 
   // Re-validate the current user via /auth/me so Composer can render
   // optimistic messages with the right `sender` shape. Falls back to
@@ -77,8 +106,10 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
     staleTime: 10_000,
   });
 
-  // Local overlay of pending + optimistic messages. Empty until a
-  // conversation is selected.
+  // Phase 5 — the compose path now writes directly to the TanStack
+  // Query cache (see composer.tsx). We just keep `extraMessages` as a
+  // belt-and-suspenders for callers that need to push a message
+  // through `onSend` (e.g. a future Cmd+K send shortcut).
   const [extraMessages, setExtraMessages] = useState<Message[]>([]);
   useEffect(() => {
     setExtraMessages([]);
@@ -96,30 +127,48 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
     );
   }, [conversationId, messagesQuery.data, extraMessages]);
 
-  // Local-only status progression so freshly sent bubbles eventually
-  // settle at the "read" tick. Phase 5 will replace this with WS events.
-  const progressTimers = useRef<number[]>([]);
-  useEffect(() => {
-    return () => {
-      progressTimers.current.forEach((t) => window.clearTimeout(t));
-      progressTimers.current = [];
-    };
-  }, []);
-
   function handleSend(msg: Message) {
     setExtraMessages((prev) => [...prev, msg]);
-    const steps: Array<["sent" | "delivered" | "read", number]> = [
-      ["sent", 700],
-      ["delivered", 1600],
-      ["read", 3200],
-    ];
-    for (const [status, ms] of steps) {
-      const t = window.setTimeout(() => {
-        setExtraMessages((prev) =>
-          prev.map((m) => (m.id === msg.id ? { ...m, status } : m)),
-        );
-      }, ms);
-      progressTimers.current.push(t);
+  }
+
+  // Retry a previously-failed outgoing bubble by re-issuing the POST
+  // and replacing the placeholder row in the cache.
+  async function retrySend(failedMessage: Message) {
+    if (!conversationId) return;
+    const qc = getQueryClient();
+    const me = meQuery.data ?? storedUser ?? null;
+    // Mark it sending again.
+    qc.setQueryData<Message[]>(
+      queryKeys.messages(conversationId),
+      (prev) =>
+        prev
+          ? prev.map((m) =>
+              m.id === failedMessage.id ? { ...m, status: "sending" } : m,
+            )
+          : prev,
+    );
+    try {
+      const real = await sendMessage(conversationId, {
+        content: failedMessage.content,
+        type: failedMessage.type,
+        parent_id: failedMessage.parent_id,
+      });
+      qc.setQueryData<Message[]>(
+        queryKeys.messages(conversationId),
+        (prev) => (prev ? prev.map((m) => (m.id === failedMessage.id ? real : m)) : prev),
+      );
+      void me; // me is reserved for future per-message sender_id rewrite
+    } catch {
+      qc.setQueryData<Message[]>(
+        queryKeys.messages(conversationId),
+        (prev) =>
+          prev
+            ? prev.map((m) =>
+                m.id === failedMessage.id ? { ...m, status: "failed" } : m,
+              )
+            : prev,
+      );
+      toast.error("Resend failed");
     }
   }
 
@@ -141,12 +190,35 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
   }
 
   const headerSubject = headerSubjectFor(conversation, myUserId);
-  const subtitle =
-    conversation.type === "group"
-      ? `${countOthers(conversation, myUserId)} members`
-      : headerSubject.last_seen
-        ? relativeSeen(headerSubject.last_seen)
-        : "last seen recently";
+  // Typing indicator: anyone (other than the current user) typing in
+  // this conversation. Phase 5 sees at most one name; Phase 6 will
+  // need the multi-typer case.
+  const typingUsers = (typingByConversation[conversationId] ?? {})
+    ? Object.keys(typingByConversation[conversationId] ?? {})
+        .map((s) => Number(s))
+        .filter((id) => id !== myUserId)
+    : [];
+  const typingName = typingUsers.length
+    ? participantName(conversation, typingUsers[0], myUserId)
+    : null;
+
+  // Detect "online" via the realtime presence store, falling back to
+  // the cached `last_seen` if the WS hasn't connected yet.
+  const otherParticipant = conversation.participants?.find((p) => p.id !== myUserId);
+  const otherOnline = otherParticipant
+    ? Boolean(presenceByUser[otherParticipant.id])
+    : false;
+
+  const displaySubtitle =
+    typingName != null
+      ? `${typingName} is typing…`
+      : conversation.type === "group"
+        ? `${countOthers(conversation, myUserId)} members`
+        : otherOnline
+          ? "online"
+          : headerSubject.last_seen
+            ? relativeSeen(headerSubject.last_seen)
+            : "last seen recently";
 
   return (
     <section
@@ -157,7 +229,7 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
       <ChatHeader
         headerSubject={headerSubject}
         title={conversation.name ?? "(unnamed)"}
-        subtitle={subtitle}
+        subtitle={displaySubtitle}
         showBackButton={showBackButton}
         onBack={onBack}
       />
@@ -177,7 +249,7 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
         ) : (
           <ul className="flex flex-col gap-1 py-4">
             {allMessages.map((m) => (
-              <li key={m.id}>
+              <li key={String(m.id)}>
                 <MessageBubble
                   message={m}
                   isOutgoing={myUserId !== null && m.sender_id === myUserId}
@@ -186,6 +258,7 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
                     myUserId !== null &&
                     m.sender_id !== myUserId
                   }
+                  onRetry={retrySend}
                 />
               </li>
             ))}
@@ -206,6 +279,18 @@ function countOthers(conv: Conversation, myUserId: number | null): number {
   if (!conv.participants) return 0;
   const others = conv.participants.filter((p) => p.id !== myUserId);
   return others.length || conv.participants.length;
+}
+
+/** Look up a participant's display name for the typing indicator. */
+function participantName(
+  conv: Conversation,
+  userId: number,
+  myUserId: number | null,
+): string {
+  const p = conv.participants?.find((x) => x.id === userId);
+  if (p) return p.display_name ?? p.phone ?? "Someone";
+  if (userId === myUserId) return "You";
+  return "Someone";
 }
 
 /** Avatar-shaped subject for the chat header. */

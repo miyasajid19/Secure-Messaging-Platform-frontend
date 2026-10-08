@@ -18,7 +18,7 @@
  *   read       → accent-tinted `CheckCheck`
  */
 
-import { Check, CheckCheck, Loader2 } from "lucide-react";
+import { AlertCircle, Check, CheckCheck, Loader2 } from "lucide-react";
 import { Avatar } from "./avatar";
 import { type Message } from "@/lib/api";
 import { formatBubbleTime } from "@/lib/format";
@@ -30,12 +30,16 @@ interface Props {
   /** Show sender name + avatar above the bubble (for group chats).
    *  Phase 4 mock data passes false; live data flips it on for groups. */
   showSenderHeader?: boolean;
+  /** Phase 5: invoked when the user clicks the retry triangle on a
+   *  failed outgoing bubble. */
+  onRetry?: (msg: Message) => void;
 }
 
 export function MessageBubble({
   message,
   isOutgoing,
   showSenderHeader = false,
+  onRetry,
 }: Props) {
   const time = formatBubbleTime(message.created_at);
 
@@ -104,7 +108,11 @@ export function MessageBubble({
               {time}
             </span>
             {isOutgoing ? (
-              <ReceiptMark status={message.status} mutedFg={mutedFg} />
+              <ReceiptMark
+                status={message.status}
+                mutedFg={mutedFg}
+                onRetry={onRetry ? () => onRetry(message) : undefined}
+              />
             ) : null}
           </div>
         </div>
@@ -116,9 +124,11 @@ export function MessageBubble({
 function ReceiptMark({
   status,
   mutedFg,
+  onRetry,
 }: {
   status: Message["status"];
   mutedFg: string;
+  onRetry?: () => void;
 }) {
   // Live server messages have `status = undefined` → show the "read"
   // tick (accent color), which matches the existing UX of older
@@ -126,6 +136,21 @@ function ReceiptMark({
   // WS events fire.
   const effective = status ?? "read";
 
+  if (effective === "failed") {
+    // Red retry triangle. Same colour as the error token so the user
+    // notices immediately.
+    return (
+      <button
+        type="button"
+        onClick={onRetry}
+        aria-label="Retry send"
+        className="flex h-5 w-5 items-center justify-center rounded-full"
+        style={{ color: "var(--color-status-error)" }}
+      >
+        <AlertCircle size={14} strokeWidth={2.5} aria-hidden />
+      </button>
+    );
+  }
   if (effective === "sending") {
     return (
       <Loader2

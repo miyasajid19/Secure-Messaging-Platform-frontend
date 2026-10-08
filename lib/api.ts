@@ -68,12 +68,14 @@ export interface Message {
   /**
    * Local-only optimistic status. Live messages arrive with `status =
    * undefined`; bubble component treats that as "delivered" for
-   * outgoing messages. Phase 5's WS events will populate this client-
-   * side as sending → sent → delivered → read.
+   * outgoing messages. Phase 5's WS events populate this client-side
+   * as sending → sent → delivered → read. `failed` is set on a non-2xx
+   * POST from the composer.
    */
-  status?: "sending" | "sent" | "delivered" | "read";
+  status?: "sending" | "sent" | "delivered" | "read" | "failed";
 }
 
+// --- types (mirror backend's UserOut + Phase 4 schemas) --------------------
 export interface Conversation {
   id: number;
   type: ConversationType;
@@ -253,6 +255,66 @@ export const searchUsers = (q: string) =>
     `/users/search${q ? `?q=${encodeURIComponent(q)}` : ""}`,
     { method: "GET" },
   );
+
+// --- Phase 5: send + read receipts + presence -------------------------------
+
+/** Body for `POST /conversations/{id}/messages`. */
+export interface SendMessageBody {
+  content: string;
+  type: MessageType;
+  /** Phase 8 reply; accepted but ignored server-side in Phase 5. */
+  parent_id?: number | null;
+}
+
+export const sendMessage = (
+  conversationId: number,
+  body: SendMessageBody,
+) =>
+  apiFetch<Message>(`/conversations/${conversationId}/messages`, {
+    method: "POST",
+    body,
+  });
+
+/** `POST /conversations/{id}/read` — marks messages up to `message_id` read
+ *  for the current user. */
+export interface MarkReadResponse {
+  marked_read: number;
+}
+export const markRead = (conversationId: number, messageId: number) =>
+  apiFetch<MarkReadResponse>(`/conversations/${conversationId}/read`, {
+    method: "POST",
+    body: { message_id: messageId },
+  });
+
+/** `GET /conversations/{id}/message-status?message_ids=1,2,3`
+ *  Returns `{ [messageId: string]: MessageStatus }`. */
+export const getMessageStatus = (
+  conversationId: number,
+  messageIds: number[],
+) =>
+  apiFetch<Record<string, Message["status"] | "unknown">>(
+    `/conversations/${conversationId}/message-status?message_ids=${messageIds.join(",")}`,
+    { method: "GET" },
+  );
+
+/** `GET /users/online` — list of currently online user ids. */
+export const getOnlineUsers = () =>
+  apiFetch<number[]>("/users/online", { method: "GET" });
+
+/** Map backend's status string (`sending|sent|delivered|read|failed`) to
+ *  the value our bubble component uses. The backend's spec only emits
+ *  `delivered` and `read`; `sending` and `sent`/`failed` are
+ *  client-side states for optimistic UI. */
+export type BackendMessageStatus = "sending" | "sent" | "delivered" | "read" | "failed";
+export function mapBackendStatus(
+  value: string | undefined | null,
+): Message["status"] | "failed" {
+  if (!value) return "read";
+  if (value === "sending" || value === "sent" || value === "delivered" || value === "read") {
+    return value;
+  }
+  return "read"; // unknown backend value — treat as fully delivered
+}
 
 // --- query client + keys ---------------------------------------------------
 

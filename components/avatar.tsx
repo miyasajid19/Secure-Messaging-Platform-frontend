@@ -1,14 +1,10 @@
 /**
  * Round avatar with an optional online dot.
  *
- * Online = the user's `last_seen` is within `onlineThresholdMs` (default
- * 5 min). For mock data we render the dot always when a `last_seen`
- * timestamp is present; tweak the threshold to match the backend's
- * heartbeat once it lands.
- *
- * The `subject` prop is intentionally permissive so we can render the
- * same component for Users *and* Conversations (the list-row avatar
- * uses the conversation's name + avatar).
+ * Phase 5 wiring: pass `online={isUserOnline(userId)}` to override the
+ * `last_seen` heuristic. When `online` is provided as a boolean it
+ * wins (so a recently active user whose WS just disconnected gets the
+ * offline dot back immediately).
  */
 
 interface AvatarProps {
@@ -20,6 +16,8 @@ interface AvatarProps {
   size?: number;
   showOnline?: boolean;
   onlineThresholdMs?: number;
+  /** Phase 5 explicit online flag, sourced from the WS presence store. */
+  online?: boolean;
 }
 
 export function Avatar({
@@ -27,6 +25,7 @@ export function Avatar({
   size = 40,
   showOnline = true,
   onlineThresholdMs = 5 * 60 * 1000,
+  online,
 }: AvatarProps) {
   const initials = (subject.display_name || "?")
     .split(/\s+/)
@@ -35,11 +34,14 @@ export function Avatar({
     .join("")
     .toUpperCase();
 
-  const isOnline = Boolean(
-    showOnline &&
-      subject.last_seen &&
-      Date.now() - new Date(subject.last_seen).getTime() < onlineThresholdMs,
-  );
+  const isOnline =
+    online !== undefined
+      ? Boolean(showOnline && online)
+      : Boolean(
+          showOnline &&
+            subject.last_seen &&
+            Date.now() - new Date(subject.last_seen).getTime() < onlineThresholdMs,
+        );
 
   return (
     <span

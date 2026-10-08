@@ -18,6 +18,7 @@ import {
   type MessagePreview,
 } from "@/lib/api";
 import { formatConversationTimestamp } from "@/lib/format";
+import { useRealtimeStore } from "@/store/realtime";
 
 interface Props {
   conversation: Conversation;
@@ -126,6 +127,18 @@ export function ConversationListRow({
     : "";
   const { title, preview, avatar } = resolveDisplay(conversation);
 
+  // Subscribe to the realtime presence store so the green dot lights
+  // up the moment the WS tells us the other party connected.
+  const presenceByUser = useRealtimeStore((s) => s.presenceByUser);
+  // For direct conversations we want the *other* participant's id; for
+  // groups we don't show a green dot (no per-participant indicator).
+  const otherParticipant = conversation.participants?.find(
+    (p) => p.id !== CURRENT_USER_ID_HINT,
+  );
+  const otherOnline = conversation.type === "direct" && otherParticipant
+    ? Boolean(presenceByUser[otherParticipant.id])
+    : false;
+
   return (
     <button
       type="button"
@@ -142,6 +155,7 @@ export function ConversationListRow({
           display_name: avatar.display_name,
           last_seen: avatar.last_seen ?? null,
         }}
+        online={otherOnline}
       />
       <div className="flex min-w-0 flex-1 flex-col">
         <span className="truncate text-sm font-semibold text-[var(--color-fg-primary)]">
