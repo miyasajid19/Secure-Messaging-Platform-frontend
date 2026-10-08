@@ -1,0 +1,39 @@
+/*
+ * Signal palette tokens (placeholder).
+ *
+ * Real values land in Phase 3 once we've screenshotted Signal and picked
+ * the exact greys/accents. For now this file reserves the token namespace
+ * so component code can already reference `var(--color-bg-primary)` etc.
+ * without future renames.
+ *
+ * Naming convention: <group>-<role>-<modifier?>
+ * Groups we expect: bg, fg, border, accent, status, shadow.
+ */
+
+:root {
+  /* Surfaces (dark-first; Signal is dark by default) */
+  --color-bg-primary: #1b1c1f;     /* app shell */
+  --color-bg-secondary: #2a2c2f;   /* panes (conversation list, chat) */
+  --color-bg-tertiary: #3a3d41;    /* hover / selected rows */
+  --color-bg-elevated: #2f3134;    /* composer / modals */
+
+  /* Foreground */
+  --color-fg-primary: #e9e9e9;
+  --color-fg-secondary: #b0b3b8;
+  --color-fg-muted: #7a7d82;
+
+  /* Borders / dividers */
+  --color-border-subtle: #2a2c2f;
+  --color-border-default: #3a3d41;
+
+  /* Accents (Signal uses a desaturated blue for outgoing bubbles/links) */
+  --color-accent: #5b9dff;
+  --color-accent-fg: #ffffff;
+  --color-bubble-out: #2c5278;     /* outgoing message bubble */
+  --color-bubble-in: #2a2c2f;      /* incoming message bubble */
+
+  /* Status (typing indicators, online dot, etc.) */
+  --color-status-online: #3ab27f;
+  --color-status-typing: #5b9dff;
+  --color-status-error: #ff5b5b;
+}

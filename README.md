@@ -1,36 +1,84 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Signal Clone — Frontend
 
-## Getting Started
+Next.js 16 (App Router) + TypeScript + Tailwind v4 front-end for the Signal
+messenger clone. See `../PLAN.md` for the overall design.
 
-First, run the development server:
+## Status
+
+**Phase 0 — scaffolding complete.** Boots, builds, env wired, libraries
+installed. UI is the default starter page; the Signal shell (three-pane
+layout, conversation list, chat pane, bubbles, composer) lands in Phase 3.
+
+## Prerequisites
+
+- **Node.js 20+**
+- **npm** (project pins `package-lock.json`; swap for `pnpm`/`yarn` if you
+  prefer, but don't mix)
+- The FastAPI backend on `http://localhost:8000` — see `../backend/` (Phase 1+)
+
+## Install
+
+```bash
+npm install
+```
+
+## Develop
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+App boots on <http://localhost:3000> (auto-falls-back to 3001 if 3000 is
+busy). Hot reload via Turbopack.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Other scripts:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Script           | What it does                            |
+| ---------------- | --------------------------------------- |
+| `npm run dev`    | Dev server with HMR                     |
+| `npm run build`  | Production build                        |
+| `npm run start`  | Serve the production build              |
+| `npm run lint`   | ESLint (Next + TS core-web-vitals)      |
 
-## Learn More
+## Environment variables
 
-To learn more about Next.js, take a look at the following resources:
+All vars are client-visible (`NEXT_PUBLIC_*`) — keep secrets on the server.
+Copy `.env.example` to `.env.local` and fill in:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+| Var                    | Default                          | Used in     |
+| ---------------------- | -------------------------------- | ----------- |
+| `NEXT_PUBLIC_API_URL`  | `http://localhost:8000`          | REST calls  |
+| `NEXT_PUBLIC_WS_URL`   | `ws://localhost:8000/ws`         | WebSocket   |
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+`lib/env.ts` exports a typed `env` object with a dev-mode fail-fast guard.
+Use `import { env } from "@/lib/env"` rather than reading `process.env` ad hoc.
 
-## Deploy on Vercel
+## Project layout
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```
+app/
+  layout.tsx        # root layout (Next.js 16 LayoutProps<'/'>)
+  page.tsx          # placeholder — replaced by the Signal shell in Phase 3
+  globals.css       # Tailwind v4 entry; imports tokens.css
+  tokens.css        # Signal palette (placeholder values; refined in Phase 3)
+lib/
+  env.ts            # typed env with dev-mode guard
+public/             # static assets
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Phase 3 placeholder
+
+The three-pane Signal shell (nav rail + conversation list + chat pane) and
+all shared UI primitives will live under `app/` (route-segment files) and
+`components/`. Component code should already prefer `var(--color-…)` tokens
+from `app/tokens.css` over raw Tailwind palette utilities, so the Phase 3→8
+dark-mode polish is cheap.
+
+State and data libs installed but not yet wired:
+
+- `zustand` — UI state (e.g. selected conversation, modals)
+- `@tanstack/react-query` — server state (REST cache, mutations)
+- `sonner` — toasts
+- `lucide-react` — icons
+- `clsx` + `tailwind-merge` — class composition
+- `date-fns` — relative timestamps
