@@ -47,6 +47,7 @@ import { useUiStore } from "@/store/ui";
 import { useAuthStore } from "@/store/auth";
 import { performLogout } from "@/lib/auth-actions";
 import { MessageSquarePlus } from "lucide-react";
+import { SHORTCUT_SEARCH_EVENT } from "@/app/providers";
 
 const DEBOUNCE_MS = 150;
 
@@ -74,6 +75,7 @@ export function ConversationListPane() {
   // Debounce the search input.
   const [searchInput, setSearchInput] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const searchRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
     const id = window.setTimeout(
       () => setDebouncedSearch(searchInput.trim().toLowerCase()),
@@ -81,6 +83,19 @@ export function ConversationListPane() {
     );
     return () => window.clearTimeout(id);
   }, [searchInput]);
+
+  // ⌘K / `/` shortcut listener. The actual keydown handler is in
+  // `app/providers.tsx`; we just listen for the dispatch event.
+  useEffect(() => {
+    function focusSearch() {
+      const el = searchRef.current;
+      if (!el) return;
+      el.focus();
+      el.select();
+    }
+    window.addEventListener(SHORTCUT_SEARCH_EVENT, focusSearch);
+    return () => window.removeEventListener(SHORTCUT_SEARCH_EVENT, focusSearch);
+  }, []);
 
   const conversations = conversationsQuery.data ?? [];
 
@@ -154,9 +169,10 @@ export function ConversationListPane() {
           />
           <input
             type="search"
-            placeholder="Search"
+            placeholder="Search ⌘K"
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
+            ref={searchRef}
             className="w-full rounded-full border bg-[var(--color-bg-secondary)] py-1.5 pl-8 pr-3 text-sm text-[var(--color-fg-primary)] outline-none placeholder:text-[var(--color-fg-muted)] focus:bg-[var(--color-bg-primary)] focus:ring-2 focus:ring-[var(--color-accent)]"
             style={{ borderColor: "var(--color-border-subtle)" }}
           />
@@ -250,13 +266,14 @@ function IconButton({
 
 /**
  * Settings popover. Anchored to the top-right of the pane (the
- * `Settings2` icon button). Items for Profile / Appearance / Privacy
- * are placeholders — they toast a "Phase 7/8" hint; only Logout is
- * wired in this task.
+ * `Settings2` icon button). Each menu item navigates to the
+ * corresponding `/settings?section=X` panel — see `app/settings/page.tsx`.
+ * Logout opens the confirmation modal.
  *
  * Closes on:
  *   - Clicking an action
- *   - Clicking anywhere outside (Esc-key dismissal is a Phase 7 polish)
+ *   - Clicking anywhere outside
+ *   - Pressing `Esc`
  */
 function SettingsMenu({
   open,
@@ -268,6 +285,8 @@ function SettingsMenu({
   onRequestLogout: () => void;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
+  // Hooks must be called before any conditional return below.
+  const router = useRouter();
 
   // Click-outside dismissal. Bound at mount, depends on `open` so
   // it skips work while the menu is closed.
@@ -280,6 +299,17 @@ function SettingsMenu({
     }
     document.addEventListener("mousedown", onPointer);
     return () => document.removeEventListener("mousedown", onPointer);
+  }, [open, onClose]);
+
+  // Esc-to-close (Phase 7 §3). Use capture so the modal-level
+  // handlers don't swallow the key first.
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
   }, [open, onClose]);
 
   if (!open) return null;
@@ -298,7 +328,7 @@ function SettingsMenu({
       icon: <User size={14} aria-hidden />,
       onClick: () => {
         onClose();
-        toast.info("Profile — Phase 7");
+        router.push("/settings?section=account");
       },
     },
     {
@@ -307,7 +337,7 @@ function SettingsMenu({
       icon: <Sun size={14} aria-hidden />,
       onClick: () => {
         onClose();
-        toast.info("Appearance — Phase 8 (dark mode)");
+        router.push("/settings?section=appearance");
       },
     },
     {
@@ -316,7 +346,7 @@ function SettingsMenu({
       icon: <Lock size={14} aria-hidden />,
       onClick: () => {
         onClose();
-        toast.info("Privacy — Phase 7");
+        router.push("/settings?section=privacy");
       },
       dividerAfter: true,
     },

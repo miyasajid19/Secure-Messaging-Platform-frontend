@@ -24,9 +24,59 @@ import { useEffect, useState, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "sonner";
 import { useAuthStore } from "@/store/auth";
-import { getOnlineUsers, setQueryClient } from "@/lib/api";
+import { getOnlineUsers, setQueryClient, type Message, queryKeys } from "@/lib/api";
 import { useRealtimeStore } from "@/store/realtime";
+import { useUiStore } from "@/store/ui";
 import { connect, disconnect } from "@/lib/realtime";
+import { useNotificationSound } from "@/lib/notification-sound";
+
+// Phase 7 §3 — keyboard shortcuts. We can't put ⌘K / `/` on a
+// component because the user is "anywhere" on the page. Mount a single
+// keydown handler at provider scope and dispatch a custom event that
+// the conversation-list-pane can listen for.
+//
+// The chosen event is `shortcut:search` so a future refactor (e.g.
+// making the search a portal) can be wired without renaming.
+const SHORTCUT_SEARCH_EVENT = "shortcut:search";
+
+function installKeyboardShortcuts() {
+  function onKey(e: KeyboardEvent) {
+    // ⌘K / Ctrl+K
+    if (
+      (e.metaKey || e.ctrlKey) &&
+      !e.shiftKey &&
+      !e.altKey &&
+      e.key.toLowerCase() === "k"
+    ) {
+      e.preventDefault();
+      window.dispatchEvent(new CustomEvent(SHORTCUT_SEARCH_EVENT));
+      return;
+    }
+    // `/` — but only if the user isn't already typing in an input /
+    // textarea / contenteditable. The phase 5 OTP input eats the key
+    // too — that's fine, we want to focus the search only when the
+    // user is "outside" text fields.
+    if (
+      e.key === "/" &&
+      !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey
+    ) {
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName.toLowerCase();
+      const isEditable =
+        tag === "input" ||
+        tag === "textarea" ||
+        target?.isContentEditable;
+      if (!isEditable) {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent(SHORTCUT_SEARCH_EVENT));
+      }
+    }
+  }
+  window.addEventListener("keydown", onKey);
+  return () => window.removeEventListener("keydown", onKey);
+}
+
+export { SHORTCUT_SEARCH_EVENT };
 
 export function Providers({ children }: { children: ReactNode }) {
   const [queryClient] = useState(
@@ -48,6 +98,36 @@ export function Providers({ children }: { children: ReactNode }) {
   useEffect(() => {
     setQueryClient(queryClient);
   }, [queryClient]);
+
+  // Global keyboard shortcuts (Phase 7 §3).
+  useEffect(() => installKeyboardShortcuts(), []);
+
+  // Notification sound: subscribe to the React Query cache. Whenever
+  // a `['messages', id]` cache entry grows by exactly 1 and the id
+  // doesn't match the currently-selected conversation, play a chime.
+  // Phase 7 §5.
+  const sound = useNotificationSound();
+  useEffect(() => {
+    const cache = queryClient.getQueryCache();
+    const unsubscribe = cache.subscribe((event) => {
+      if (event.type !== "updated") return;
+      const key = event.query.queryKey;
+      if (key[0] !== "messages") return;
+      const convId = key[1] as number | null;
+      if (convId == null) return;
+      const next = queryClient.getQueryData<Message[]>(key) ?? [];
+      const prev = (event.query.state as { data?: Message[] }).data ?? [];
+      if (next.length <= prev.length) return; // ignore shrinks
+      const added = next[next.length - 1];
+      if (!added) return;
+      const myUserId = useAuthStore.getState().user?.id ?? null;
+      const isMine = myUserId != null && added.sender_id === myUserId;
+      const activeId = useUiStore.getState().selectedConversationId;
+      if (isMine || activeId === convId) return;
+      sound.playChime();
+    });
+    return () => unsubscribe();
+  }, [queryClient, sound]);
 
   // Hydrate auth from localStorage exactly once on mount. This runs in
   // the browser, so `window.localStorage` is always available here.

@@ -23,6 +23,7 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Search, X } from "lucide-react";
 import { toast } from "sonner";
+import { useAuthStore } from "@/store/auth";
 import { Avatar } from "./avatar";
 import {
   ApiError,
@@ -203,9 +204,11 @@ export function AddContactModal({ open, onClose }: Props) {
                 {searchError}
               </p>
             ) : results.length === 0 ? (
-              <p className="px-2 py-6 text-center text-sm text-[var(--color-fg-muted)]">
-                No matches.
-              </p>
+              <SelfHint
+                query={debounced}
+                myName={useAuthStore.getState().user?.display_name ?? null}
+                myPhone={useAuthStore.getState().user?.phone ?? null}
+              />
             ) : (
               <ul className="flex flex-col">
                 {results.map((u) => (
@@ -280,3 +283,37 @@ function ResultRow({
 // Used so a future caller can preload the contacts cache (e.g. when the
 // modal is opened) without a separate import.
 export const _key_contacts = listContacts;
+
+/**
+ * Phase 7 §7 — when the user searches for their own phone or
+ * display_name, the backend excludes them from results, so
+ * `results.length === 0`. Surface a small inline hint instead of the
+ * generic "No matches." so the user understands why their own name
+ * shows up empty.
+ */
+function SelfHint({
+  query,
+  myName,
+  myPhone,
+}: {
+  query: string;
+  myName: string | null;
+  myPhone: string | null;
+}) {
+  const q = query.trim().toLowerCase();
+  const matchesName =
+    myName && myName.toLowerCase().split(/\s+/).some((part) => part.startsWith(q));
+  const matchesPhone = myPhone && myPhone.replace(/\D/g, "").includes(q.replace(/\D/g, ""));
+  if (matchesName || matchesPhone) {
+    return (
+      <p className="px-2 py-6 text-center text-sm text-[var(--color-fg-muted)]">
+        That's you. Search for someone else to start a conversation.
+      </p>
+    );
+  }
+  return (
+    <p className="px-2 py-6 text-center text-sm text-[var(--color-fg-muted)]">
+      No matches.
+    </p>
+  );
+}

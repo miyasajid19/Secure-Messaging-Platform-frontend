@@ -14,8 +14,8 @@
  *     other than the current user.
  */
 
-import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Phone, Search, Video } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowDown, ArrowLeft, Phone, Search, Video } from "lucide-react";
 import { toast } from "sonner";
 import { EmptyState } from "./empty-state";
 import { MessageSquareText } from "lucide-react";
@@ -39,6 +39,7 @@ import { useUiStore } from "@/store/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@/store/auth";
 import { useRealtimeStore } from "@/store/realtime";
+import { conversationTitle } from "@/lib/conversation-title";
 
 interface Props {
   /** On mobile this component is hidden unless conversationId is set. */
@@ -180,6 +181,116 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
   // open it; the modal itself ignores the conversation type at render.
   const [groupInfoOpen, setGroupInfoOpen] = useState(false);
 
+  // Smart-scroll state (Phase 7 UX follow-up). We track the *id* of
+  // the last message so the smart-scroll effect can fire only when a
+  // genuinely new message lands (not on every re-render). The
+  // `pendingNewCount` is the "you scrolled up — N new messages" pill
+  // counter; `scrollRef` is the message list's overflow container.
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [pendingNewCount, setPendingNewCount] = useState(0);
+  const lastSeenMessageIdRef = useRef<number | null>(null);
+  // Force-scroll to bottom (e.g. on conversation change, or when the
+  // current user sends a message). Bypasses the smart-scroll logic.
+  const forceScrollToBottom = useRef(false);
+
+  /**
+   * Scroll the message container to its bottom. `smooth` is nice for
+   * user-driven scrolls; the call sites that need immediate (jump
+   * to bottom on conversation open) pass `{ smooth: false }`.
+   */
+  function scrollToBottom(opts: { smooth?: boolean } = { smooth: true }) {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({
+      top: el.scrollHeight,
+      behavior: opts.smooth ? "smooth" : "auto",
+    });
+  }
+
+  /**
+   * "Near bottom" — true when the user is within `THRESHOLD_PX` of
+   * the scrollable bottom. The threshold is forgiving because tall
+   * bubbles + long messages can make the bottom edge ambiguous.
+   */
+  const THRESHOLD_PX = 96;
+  function isNearBottom(): boolean {
+    const el = scrollRef.current;
+    if (!el) return true; // optimistic default
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= THRESHOLD_PX;
+  }
+
+  // When the conversation changes, jump to the bottom. Wait a frame
+  // so the new messages have rendered before we measure scrollHeight.
+  useEffect(() => {
+    if (conversationId == null) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    // Two RAFs: the first lets React commit the new message list,
+    // the second runs after the browser has measured the new height.
+    const raf1 = requestAnimationFrame(() => {
+      const raf2 = requestAnimationFrame(() => {
+        forceScrollToBottom.current = true;
+        scrollToBottom({ smooth: false });
+      });
+      // Cancel raf2 if the component unmounts.
+      return () => cancelAnimationFrame(raf2);
+    });
+    // Reset the pending-new counter on conversation switch.
+    setPendingNewCount(0);
+    lastSeenMessageIdRef.current = null;
+    return () => cancelAnimationFrame(raf1);
+  }, [conversationId]);
+
+  // When a new message arrives, decide whether to auto-scroll or
+  // surface the "N new messages" pill. Depends on the latest
+  // message id and on the current user (senders always scroll).
+  useEffect(() => {
+    if (allMessages.length === 0) return;
+    const latest = allMessages[allMessages.length - 1];
+    if (latest.id === lastSeenMessageIdRef.current) return; // no new msg
+
+    if (forceScrollToBottom.current) {
+      // Either initial mount or the user just sent. Auto-scroll.
+      forceScrollToBottom.current = false;
+      lastSeenMessageIdRef.current = latest.id;
+      requestAnimationFrame(() => scrollToBottom({ smooth: false }));
+      return;
+    }
+
+    const isMine = myUserId != null && latest.sender_id === myUserId;
+    if (isMine || isNearBottom()) {
+      // Sender, or user is already at the bottom — auto-scroll.
+      lastSeenMessageIdRef.current = latest.id;
+      setPendingNewCount(0);
+      requestAnimationFrame(() => scrollToBottom({ smooth: isMine }));
+    } else {
+      // User is scrolled up. Show the pill.
+      lastSeenMessageIdRef.current = latest.id;
+      setPendingNewCount((n) => n + 1);
+    }
+  }, [allMessages, myUserId]);
+
+  // Manual scroll listener — when the user scrolls back to (or
+  // past) the bottom, clear the "N new messages" pill. Also clears
+  // the `forceScrollToBottom` flag, because once the user has
+  // scrolled away from the bottom, the next incoming message should
+  // be treated as off-screen (i.e. surface the pill) rather than
+  // auto-scrolled because of the stale flag.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    function onScroll() {
+      if (isNearBottom()) {
+        setPendingNewCount(0);
+      } else {
+        forceScrollToBottom.current = false;
+      }
+    }
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // No conversation selected (or conversations list still loading):
   // render the empty state. Declared BEFORE any `conv.*` access so we
   // don't reach for `.participants` on `undefined`.
@@ -270,11 +381,11 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
     <section
       className="flex h-full flex-1 flex-col"
       style={{ backgroundColor: "var(--color-bg-primary)" }}
-      aria-label={`Chat with ${conv.name ?? "conversation"}`}
+      aria-label={`Chat with ${conversationTitle(conv, myUserId)}`}
     >
       <ChatHeader
         headerSubject={headerSubject}
-        title={conv.name ?? "(unnamed)"}
+        title={conversationTitle(conv, myUserId)}
         subtitle={displaySubtitle}
         showBackButton={showBackButton}
         onBack={onBack}
@@ -283,7 +394,36 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
         }
       />
 
-      <div className="flex-1 overflow-y-auto">
+      <div
+        ref={scrollRef}
+        className="relative flex-1 overflow-y-auto"
+        aria-label="Messages"
+      >
+        {pendingNewCount > 0 ? (
+          <button
+            type="button"
+            onClick={() => {
+              // Click means "I want to read the latest now" — clear
+              // the counter immediately and snap to the bottom.
+              // Don't rely on the scroll listener to clear it, since
+              // smooth scrolling would leave the pill visible for the
+              // ~150ms duration of the animation.
+              setPendingNewCount(0);
+              forceScrollToBottom.current = true;
+              scrollToBottom({ smooth: true });
+            }}
+            aria-label={`${pendingNewCount} new ${pendingNewCount === 1 ? "message" : "messages"}. Click to jump to latest.`}
+            className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold shadow-lg transition hover:opacity-90"
+            style={{
+              backgroundColor: "var(--color-accent)",
+              color: "var(--color-accent-fg)",
+            }}
+          >
+            <ArrowDown size={14} aria-hidden />
+            {pendingNewCount} new {pendingNewCount === 1 ? "message" : "messages"}
+          </button>
+        ) : null}
+
         {messagesQuery.isLoading ? (
           <SkeletonBubbles />
         ) : messagesQuery.error ? (
@@ -293,7 +433,7 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
           />
         ) : allMessages.length === 0 ? (
           <div className="flex h-full items-center justify-center px-8 text-center text-sm text-[var(--color-fg-muted)]">
-            No messages yet — say hi.
+            No messages yet — say hi to start the conversation.
           </div>
         ) : (
           <ul className="flex flex-col gap-1 py-4">

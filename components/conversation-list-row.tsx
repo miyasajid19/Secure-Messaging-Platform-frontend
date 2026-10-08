@@ -9,6 +9,9 @@
  * `Conversation` is the live shape from `lib/api.ts` (Phase 4). A live
  * conversation may have `name = null` (typically for direct chats);
  * we synthesize a friendly title from participants in that case.
+ *
+ * Title derivation lives in `lib/conversation-title.ts` so this row
+ * and the chat-pane header share the same logic.
  */
 
 import { Check, CheckCheck } from "lucide-react";
@@ -19,6 +22,8 @@ import {
 } from "@/lib/api";
 import { formatConversationTimestamp } from "@/lib/format";
 import { useRealtimeStore } from "@/store/realtime";
+import { useAuthStore } from "@/store/auth";
+import { conversationTitle } from "@/lib/conversation-title";
 
 interface Props {
   conversation: Conversation;
@@ -33,56 +38,35 @@ interface Display {
   preview: string;
 }
 
-function resolveDisplay(conv: Conversation): Display {
-  const title = displayTitle(conv);
-  const preview = previewFromLastMessage(conv);
-  const avatar = avatarSubjectForConv(conv);
+function resolveDisplay(conv: Conversation, currentUserId: number | null): Display {
+  const title = conversationTitle(conv, currentUserId);
+  const preview = previewFromLastMessage(conv, currentUserId);
+  const avatar = avatarSubjectForConv(conv, currentUserId);
   return { title, preview, avatar };
 }
 
-/** Title precedence: explicit name → first non-self participant → "(unknown)". */
-function displayTitle(conv: Conversation): string {
-  if (conv.name) return conv.name;
-  if (conv.participants && conv.participants.length > 0) {
-    // For direct conversations, there will be exactly one other
-    // participant + the current user. Prefer that one. For groups,
-    // join the first few.
-    const others = conv.participants.filter((p) => p.id !== CURRENT_USER_ID_HINT);
-    if (others.length === 1) {
-      return others[0].display_name ?? others[0].phone ?? "Unknown";
-    }
-    if (others.length > 1) {
-      return others
-        .slice(0, 3)
-        .map((p) => p.display_name ?? p.phone ?? "?")
-        .join(", ");
-    }
-  }
-  return "Unknown";
-}
-
-// A local hint — at render time the row doesn't know the current user
-// id from `useAuthStore` (that would create an import cycle in mock
-// data). The full name from participants is fine if the backend
-// includes both the current user and the other party — we'll keep
-// the first non-empty name.
-//
-// The shell renders the row inside an authenticated context; if this
-// hook ever needs to be precise, replace the heuristic with
-// `useAuthStore.getState().user?.id`.
-let CURRENT_USER_ID_HINT: number | null = null;
-
-/** Derive a (avatar_url, display_name) pair for the Avatar component. */
-function avatarSubjectForConv(conv: Conversation): {
+/**
+ * Derive an (avatar_url, display_name) pair for the Avatar component.
+ * For direct chats we use the other participant's avatar; for
+ * groups we use the conversation's avatar_url (or fall back to
+ * the title when the conversation has no avatar).
+ */
+function avatarSubjectForConv(
+  conv: Conversation,
+  currentUserId: number | null,
+): {
   avatar_url: string | null;
   display_name: string;
   last_seen?: string | null;
 } {
   if (conv.avatar_url) {
-    return { avatar_url: conv.avatar_url, display_name: displayTitle(conv) };
+    return {
+      avatar_url: conv.avatar_url,
+      display_name: conversationTitle(conv, currentUserId),
+    };
   }
   // Fall back to first non-self participant.
-  const other = conv.participants?.find((p) => p.id !== CURRENT_USER_ID_HINT);
+  const other = conv.participants?.find((p) => p.id !== currentUserId);
   if (other) {
     return {
       avatar_url: other.avatar_url,
@@ -92,22 +76,30 @@ function avatarSubjectForConv(conv: Conversation): {
   }
   return {
     avatar_url: null,
-    display_name: displayTitle(conv),
+    display_name: conversationTitle(conv, currentUserId),
   };
 }
 
-function previewFromLastMessage(conv: Conversation): string {
+function previewFromLastMessage(
+  conv: Conversation,
+  currentUserId: number | null,
+): string {
   const last: MessagePreview | null = conv.last_message;
   if (!last) return "No messages yet";
-  // Backend's MessagePreview doesn't include the sender display name
-  // (it's just id + content). We compute "You: <msg>" / "Them: <msg>"
-  // heuristically by id. The chat pane (Phase 5) refines this when it
-  // resolves the sender from the joined `sender` field.
-  const isMine = last.sender_id === CURRENT_USER_ID_HINT;
-  const prefix = isMine
-    ? "You: "
-    : // We don't have display_name on MessagePreview — keep it short.
-      "";
+  // Backend's MessagePreview doesn't include the sender display name,
+  // so we resolve it from `conv.participants` for groups (Phase 7 §6
+  // — "Alice: see you at 5"). Direct conversations don't prefix.
+  const isMine = last.sender_id === currentUserId;
+  let prefix = "";
+  if (isMine) {
+    prefix = "You: ";
+  } else if (conv.type === "group") {
+    const sender = conv.participants?.find(
+      (p) => p.id === last.sender_id,
+    );
+    const name = sender?.display_name?.split(" ")[0] ?? "Someone";
+    prefix = `${name}: `;
+  }
   return `${prefix}${truncate(last.content, 48)}`;
 }
 
@@ -125,7 +117,14 @@ export function ConversationListRow({
   const time = conversation.last_message_at
     ? formatConversationTimestamp(conversation.last_message_at)
     : "";
-  const { title, preview, avatar } = resolveDisplay(conversation);
+  // Read the current user id once. Subscribing means the row will
+  // re-render if the user logs out / switches — at which point
+  // currentUserId is null and the title falls back to "Unknown".
+  const currentUserId = useAuthStore((s) => s.user?.id ?? null);
+  const { title, preview, avatar } = resolveDisplay(
+    conversation,
+    currentUserId,
+  );
 
   // Subscribe to the realtime presence store so the green dot lights
   // up the moment the WS tells us the other party connected.
@@ -133,7 +132,7 @@ export function ConversationListRow({
   // For direct conversations we want the *other* participant's id; for
   // groups we don't show a green dot (no per-participant indicator).
   const otherParticipant = conversation.participants?.find(
-    (p) => p.id !== CURRENT_USER_ID_HINT,
+    (p) => p.id !== currentUserId,
   );
   const otherOnline = conversation.type === "direct" && otherParticipant
     ? Boolean(presenceByUser[otherParticipant.id])
@@ -178,7 +177,7 @@ export function ConversationListRow({
         </span>
         {unread > 0 ? (
           <span
-            className="flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold text-[var(--color-accent-fg)]"
+            className="flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold text-[var(--color-accent-fg)"
             style={{ backgroundColor: "var(--color-accent)" }}
             aria-label={`${unread} unread`}
           >
