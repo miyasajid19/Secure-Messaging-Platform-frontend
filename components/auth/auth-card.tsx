@@ -58,7 +58,7 @@ export function AuthTextInput(
   return (
     <input
       {...props}
-      className={`w-full rounded-lg border bg-white px-3 py-2 text-base text-[var(--color-fg-primary)] outline-none transition focus:ring-2 ${
+      className={`w-full rounded-lg border bg-[var(--color-bg-primary)] px-3 py-2 text-base text-[var(--color-fg-primary)] outline-none transition focus:ring-2 ${
         props.className ?? ""
       }`}
       style={{

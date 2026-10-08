@@ -31,6 +31,8 @@
   --color-accent-fg: #ffffff;
   --color-bubble-out: #2c6bed;     /* outgoing message bubble */
   --color-bubble-in: #f0f0f3;      /* incoming message bubble */
+  --color-bubble-out-fg: #ffffff;  /* outgoing bubble primary text */
+  --color-bubble-out-fg-muted: rgba(255, 255, 255, 0.75); /* timestamp + read-receipts on outgoing */
 
   /* Status (typing indicators, online dot, errors) */
   --color-status-online: #25d366;

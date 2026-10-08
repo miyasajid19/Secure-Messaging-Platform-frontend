@@ -1,31 +1,35 @@
 "use client";
 
 /**
- * Phase 2 placeholder home page.
+ * Phase 3 — root chat shell.
  *
- * Lives in the root segment because the App Router needs a page there.
- * Phase 3 replaces this with the three-pane Signal shell. For now we:
+ * Structure:
+ *   <auth guard + getMe>                  ← from Phase 2
+ *     <h-full grid>
+ *       <LeftRail />                       ← 60-68px icon nav
+ *       <ConversationListPane />           ← 320px list (hidden < 1024 when chat is open)
+ *       <ChatPane />                       ← flex-1 chat
  *
- *   - wait until the auth store has hydrated from `localStorage`
- *   - redirect to `/auth/phone` if no token
- *   - call `GET /auth/me` via TanStack Query to validate the stored JWT
- *   - render the user's display name (or phone), with a Logout button
- *   - if `/auth/me` returns 401 (expired/stale token), clear the store
- *     and bounce back to login
- *
- * All client-side — no RSC fetches. This satisfies §9 of the spec.
+ * Collapse rule (§7): on screens narrower than 1024px we toggle
+ * between list and chat — whichever is "in focus" via the
+ * `mobileFocus` state. The "back" button on the chat header returns
+ * the user to the list.
  */
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { LogOut, MessageCircle } from "lucide-react";
-import { toast } from "sonner";
 import { ApiError, getMe, queryKeys } from "@/lib/api";
 import {
   selectIsAuthenticated,
   useAuthStore,
 } from "@/store/auth";
+import { LeftRail } from "@/components/left-rail";
+import { ConversationListPane } from "@/components/conversation-list-pane";
+import { ChatPane } from "@/components/chat-pane";
+import { useUiStore } from "@/store/ui";
+
+const MOBILE_BREAKPOINT = 1024;
 
 export default function HomePage() {
   const router = useRouter();
@@ -33,6 +37,30 @@ export default function HomePage() {
   const isAuthed = useAuthStore(selectIsAuthenticated);
   const clear = useAuthStore((s) => s.clear);
   const storedUser = useAuthStore((s) => s.user);
+
+  // Reset mobile focus onto the list whenever a conversation deselects
+  // (e.g. user logs out, then back in).
+  const [mobileFocus, setMobileFocus] = useState<"list" | "chat">("list");
+  useEffect(() => {
+    setMobileFocus("list");
+  }, [hydrated && isAuthed]);
+
+  // Subscribe to the UI store so we can flip mobile focus when the
+  // user picks a conversation.
+  const selectedId = useUiStore((s) => s.selectedConversationId);
+  useEffect(() => {
+    if (selectedId !== null) setMobileFocus("chat");
+  }, [selectedId]);
+
+  // Track viewport to decide whether mobile single-pane view applies.
+  const [isCompact, setIsCompact] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`);
+    const update = () => setIsCompact(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
 
   // Boot-time redirect: if hydration finds no token, send to login.
   useEffect(() => {
@@ -44,9 +72,7 @@ export default function HomePage() {
   const meQuery = useQuery({
     queryKey: queryKeys.me,
     queryFn: getMe,
-    // Only run the validation once we have a token.
     enabled: hydrated && isAuthed,
-    // Avoid hammering: cached per token.
     staleTime: 30_000,
   });
 
@@ -60,85 +86,60 @@ export default function HomePage() {
 
   if (!hydrated) {
     return (
-      <main className="flex min-h-full items-center justify-center px-4">
-        <p className="text-sm text-[var(--color-fg-muted)]">Loading…</p>
-      </main>
+      <FullScreenCenter>
+        <span className="text-sm text-[var(--color-fg-muted)]">
+          Loading…
+        </span>
+      </FullScreenCenter>
     );
   }
-
-  // While the redirect effect runs, render a placeholder so we don't
-  // briefly flash authenticated chrome for a user with no token.
   if (!isAuthed) {
     return (
-      <main className="flex min-h-full items-center justify-center px-4">
-        <p className="text-sm text-[var(--color-fg-muted)]">
+      <FullScreenCenter>
+        <span className="text-sm text-[var(--color-fg-muted)]">
           Redirecting to sign-in…
-        </p>
-      </main>
+        </span>
+      </FullScreenCenter>
     );
   }
 
-  const user = meQuery.data ?? storedUser;
-  const label = user?.display_name || user?.phone || "your account";
-
-  function handleLogout() {
-    clear();
-    toast.success("Signed out");
-    router.replace("/auth/phone");
-  }
+  // Use the live meQuery data when available, fall back to the cached
+  // stored user so the greeting still works in dev when the backend
+  // isn't reachable.
+  void storedUser;
 
   return (
-    <main className="flex min-h-full flex-col items-center justify-center px-4 py-12">
-      <div
-        className="w-full max-w-[420px] rounded-2xl border bg-[var(--color-bg-primary)] p-8 text-center shadow-sm"
-        style={{ borderColor: "var(--color-border-subtle)" }}
-      >
-        <div
-          className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full"
-          style={{
-            backgroundColor: "var(--color-bg-tertiary)",
-            color: "var(--color-accent)",
-          }}
-          aria-hidden
-        >
-          <MessageCircle size={22} />
-        </div>
-        <h1 className="text-xl font-semibold tracking-tight text-[var(--color-fg-primary)]">
-          Welcome back
-        </h1>
-        <p className="mt-1 text-sm text-[var(--color-fg-secondary)]">
-          Logged in as{" "}
-          <span className="font-medium text-[var(--color-fg-primary)]">
-            {meQuery.isLoading || meQuery.isFetching
-              ? "…"
-              : label}
-          </span>
-        </p>
-        {meQuery.error instanceof ApiError && meQuery.error.status !== 401 ? (
-          <p
-            className="mt-3 text-sm"
-            style={{ color: "var(--color-status-error)" }}
-            role="alert"
-          >
-            Couldn&apos;t validate session: {meQuery.error.message}
-          </p>
-        ) : null}
-        <button
-          type="button"
-          onClick={handleLogout}
-          className="mt-6 inline-flex items-center justify-center gap-2 rounded-lg border px-4 py-2 text-sm font-semibold transition hover:bg-[var(--color-bg-tertiary)] disabled:cursor-not-allowed disabled:opacity-60"
-          style={{
-            borderColor: "var(--color-border-default)",
-            color: "var(--color-fg-primary)",
-          }}
-        >
-          <LogOut size={16} aria-hidden />
-          Log out
-        </button>
-        <p className="mt-6 text-xs text-[var(--color-fg-muted)]">
-          Phase 3 will replace this with the Signal UI shell.
-        </p>
-      </div>
+    <div
+      className="flex h-screen w-screen overflow-hidden"
+      style={{ backgroundColor: "var(--color-bg-primary)" }}
+    >
+      <LeftRail />
+
+      {/* Mobile visibility: at < 1024px, only the focused pane renders.
+          Desktop: both always render side-by-side. */}
+      {isCompact ? (
+        mobileFocus === "list" ? (
+          <ConversationListPane />
+        ) : (
+          <ChatPane
+            showBackButton
+            onBack={() => setMobileFocus("list")}
+          />
+        )
+      ) : (
+        <>
+          <ConversationListPane />
+          <ChatPane />
+        </>
+      )}
+    </div>
+  );
+}
+
+function FullScreenCenter({ children }: { children: React.ReactNode }) {
+  return (
+    <main className="flex h-screen items-center justify-center">
+      {children}
     </main>
   );
 }

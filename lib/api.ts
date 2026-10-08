@@ -14,13 +14,17 @@
  * `staleTime: 30s` and `retry: false` (we surface 4xx errors to the user
  * instead of auto-retrying). Singleton + lazy init so the client survives
  * Next.js HMR without leaking observers.
+ *
+ * Phase 4 added the read endpoints (`/conversations`, …/messages,
+ * `/contacts`, `/users/search`, `POST /contacts`). Phase 5 will add the
+ * write endpoints (send message, presence, etc.).
  */
 
 import { QueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/store/auth";
 import { env } from "./env";
 
-// --- types (mirror backend's `UserOut`) -------------------------------------
+// --- types (mirror backend's UserOut + Phase 4 schemas) --------------------
 
 export interface User {
   id: number;
@@ -32,20 +36,73 @@ export interface User {
   last_seen: string | null;
 }
 
-export interface RequestOtpResponse {
-  sent: boolean;
-  debug_otp: string;
+export interface Attachment {
+  id: number;
+  url: string;
+  mime: string;
+  size_bytes: number;
 }
 
-export interface VerifyOtpResponse {
-  token: string;
-  user: User;
+export type MessageType = "text" | "image" | "system";
+export type ConversationType = "direct" | "group";
+
+export interface MessagePreview {
+  id: number;
+  sender_id: number;
+  content: string;
+  created_at: string;
+  type: MessageType;
 }
 
-export interface ProfilePatch {
-  display_name?: string;
-  username?: string;
-  avatar_url?: string;
+export interface Message {
+  id: number;
+  conversation_id: number;
+  sender_id: number;
+  content: string;
+  type: MessageType;
+  created_at: string;
+  /** Nested user card from the backend's `MessageOut.sender`. */
+  sender: User;
+  parent_id: number | null;
+  attachments: Attachment[];
+  /**
+   * Local-only optimistic status. Live messages arrive with `status =
+   * undefined`; bubble component treats that as "delivered" for
+   * outgoing messages. Phase 5's WS events will populate this client-
+   * side as sending → sent → delivered → read.
+   */
+  status?: "sending" | "sent" | "delivered" | "read";
+}
+
+export interface Conversation {
+  id: number;
+  type: ConversationType;
+  name: string | null;
+  created_at: string;
+  /** Backend populates with ALL participants (including current user). */
+  participants: User[];
+  last_message: MessagePreview | null;
+  last_message_at: string | null;
+  unread_count: number;
+  /** Backend returns either the other party's avatar (direct) or a
+   *  generated initials avatar (group). Optional — older seeded rows
+   *  may be missing this field. */
+  avatar_url: string | null;
+}
+
+export interface Contact {
+  id: number;
+  contact: User;
+  nickname: string | null;
+  added_at: string;
+}
+
+export interface UserSearchResult {
+  id: number;
+  phone: string;
+  display_name: string | null;
+  avatar_url: string | null;
+  already_contact: boolean;
 }
 
 // --- error -----------------------------------------------------------------
@@ -103,7 +160,10 @@ async function apiFetch<T>(
     let code: string | null = null;
     if (data && typeof data === "object" && data !== null) {
       const obj = data as Record<string, unknown>;
+      // FastAPI uses `detail` for most errors and `message` for some
+      // custom routes (`POST /contacts` 404 returns `{"message": ...}`).
       if (typeof obj.detail === "string") message = obj.detail;
+      else if (typeof obj.message === "string") message = obj.message;
       if (typeof obj.code === "string") code = obj.code;
     }
     throw new ApiError(message, response.status, code);
@@ -135,7 +195,66 @@ export const updateProfile = (patch: ProfilePatch) =>
     body: patch,
   });
 
-// --- query client -----------------------------------------------------------
+// --- Phase 4 read + contacts endpoints --------------------------------------
+
+export interface RequestOtpResponse {
+  sent: boolean;
+  debug_otp: string;
+}
+
+export interface VerifyOtpResponse {
+  token: string;
+  user: User;
+}
+
+export interface ProfilePatch {
+  display_name?: string;
+  username?: string;
+  avatar_url?: string;
+}
+
+/** `GET /conversations`. Sorted by `last_message_at DESC NULLS LAST`. */
+export const listConversations = () =>
+  apiFetch<Conversation[]>("/conversations", { method: "GET" });
+
+/** `GET /conversations/{id}/messages?limit=&before=`. */
+export const listMessages = (
+  conversationId: number,
+  opts: { limit?: number; before?: number } = {},
+) => {
+  const params = new URLSearchParams();
+  if (opts.limit !== undefined) params.set("limit", String(opts.limit));
+  if (opts.before !== undefined) params.set("before", String(opts.before));
+  const qs = params.toString();
+  return apiFetch<Message[]>(
+    `/conversations/${conversationId}/messages${qs ? `?${qs}` : ""}`,
+    { method: "GET" },
+  );
+};
+
+/** `GET /contacts`. */
+export const listContacts = () =>
+  apiFetch<Contact[]>("/contacts", { method: "GET" });
+
+/**
+ * `POST /contacts`. Adds a contact by phone (the only lookup key in
+ * Phase 4 — no username support). Returns the (new or existing)
+ * `ConversationOut` so the caller can select it.
+ */
+export const addContact = (phone: string) =>
+  apiFetch<Conversation>("/contacts", {
+    method: "POST",
+    body: { phone },
+  });
+
+/** `GET /users/search?q=`. Empty `q` returns `[]` per backend contract. */
+export const searchUsers = (q: string) =>
+  apiFetch<UserSearchResult[]>(
+    `/users/search${q ? `?q=${encodeURIComponent(q)}` : ""}`,
+    { method: "GET" },
+  );
+
+// --- query client + keys ---------------------------------------------------
 
 let client: QueryClient | null = null;
 
@@ -158,4 +277,9 @@ export function getQueryClient(): QueryClient {
 
 export const queryKeys = {
   me: ["auth", "me"] as const,
+  conversations: ["conversations"] as const,
+  messages: (conversationId: number | null) =>
+    ["messages", conversationId] as const,
+  contacts: ["contacts"] as const,
+  userSearch: (q: string) => ["users", "search", q] as const,
 };
