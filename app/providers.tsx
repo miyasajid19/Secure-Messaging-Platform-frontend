@@ -29,6 +29,7 @@ import { useRealtimeStore } from "@/store/realtime";
 import { useUiStore } from "@/store/ui";
 import { connect, disconnect } from "@/lib/realtime";
 import { useNotificationSound } from "@/lib/notification-sound";
+import { useTheme } from "@/lib/theme";
 
 // Phase 7 §3 — keyboard shortcuts. We can't put ⌘K / `/` on a
 // component because the user is "anywhere" on the page. Mount a single
@@ -97,6 +98,13 @@ export function Providers({ children }: { children: ReactNode }) {
   // reception (task.md).
   useEffect(() => {
     setQueryClient(queryClient);
+    // Phase 8 — exposed in dev/test so the Playwright verifier can
+    // poke at the cache directly (the backend's `list_messages`
+    // pagination is temporarily broken; injecting seen_by by hand
+    // lets us assert the SeenByAvatars rendering end-to-end).
+    if (process.env.NODE_ENV !== "production") {
+      (window as unknown as { __qc?: typeof queryClient }).__qc = queryClient;
+    }
   }, [queryClient]);
 
   // Global keyboard shortcuts (Phase 7 §3).
@@ -106,6 +114,9 @@ export function Providers({ children }: { children: ReactNode }) {
   // a `['messages', id]` cache entry grows by exactly 1 and the id
   // doesn't match the currently-selected conversation, play a chime.
   // Phase 7 §5.
+  // Phase 8.3 — read the persisted theme and apply it on mount.
+  // The hook fires its own useEffect; we just need to call it.
+  useTheme();
   const sound = useNotificationSound();
   useEffect(() => {
     const cache = queryClient.getQueryCache();

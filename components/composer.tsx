@@ -28,7 +28,7 @@ import {
   useState,
   type FormEvent,
 } from "react";
-import { Loader2, Paperclip, Send, Smile } from "lucide-react";
+import { Loader2, Paperclip, Send, Smile, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   ApiError,
@@ -39,6 +39,7 @@ import {
 import { getQueryClient, queryKeys } from "@/lib/api";
 import { send as realtimeSend } from "@/lib/realtime";
 import { useRealtimeStore } from "@/store/realtime";
+import { useReplyStore } from "@/store/reply";
 
 interface Props {
   conversationId: number | null;
@@ -59,6 +60,9 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
   // before the WS has finished registering, otherwise the sender
   // won't get the broadcast and the bubble appears nowhere.
   const wsReady = useRealtimeStore((s) => s.wsReady);
+  // Phase 8.1 — quoted-parent preview bar.
+  const replyingTo = useReplyStore((s) => s.replyingTo);
+  const clearReply = useReplyStore((s) => s.clear);
 
   // Auto-grow up to MAX_ROWS.
   useEffect(() => {
@@ -184,6 +188,12 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
     const trimmed = value.trim();
     if (!trimmed) return;
 
+    // Phase 8.1 — read reply state right before the POST so we
+    // capture the value and can clear it after a successful send.
+    const reply = useReplyStore.getState().replyingTo;
+    const parentIdForSend =
+      reply && reply.conversation_id === conversationId ? reply.id : null;
+
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const optimistic: Message = {
       id: Number.NaN, // Mark this as a pending row; backend uses numeric ids only
@@ -193,7 +203,7 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
       content: trimmed,
       type: "text",
       created_at: new Date().toISOString(),
-      parent_id: null,
+      parent_id: parentIdForSend,
       attachments: [],
       status: "sending",
     };
@@ -215,8 +225,10 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
       const real = await sendMessage(conversationId, {
         content: trimmed,
         type: "text",
-        parent_id: null,
+        parent_id: parentIdForSend,
       });
+      // Reply state is cleared on a successful send.
+      if (parentIdForSend) useReplyStore.getState().clear();
       // Replace optimistic with server message. Idempotent: if the
       // server's WS `message.new` has already pushed the same id (it
       // does, since the sender is a participant), dedup instead of
@@ -283,12 +295,43 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
   return (
     <form
       onSubmit={handleSubmit}
-      className="flex items-end gap-2 border-t px-3 py-3"
+      className="flex flex-col gap-0 border-t"
       style={{
         borderColor: "var(--color-border-subtle)",
         opacity: wsReady ? 1 : 0.75,
       }}
     >
+      {/* Phase 8.1 — quoted-parent preview bar. */}
+      {replyingTo && replyingTo.conversation_id === conversationId ? (
+        <div
+          aria-label="Replying to"
+          className="flex items-center gap-2 border-b px-3 py-2"
+          style={{ borderColor: "var(--color-border-subtle)" }}
+        >
+          <div
+            aria-hidden
+            className="w-1 self-stretch rounded-full"
+            style={{ backgroundColor: "var(--color-accent)" }}
+          />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-xs font-semibold" style={{ color: "var(--color-fg-primary)" }}>
+              Replying to {replyingTo.sender_name ?? "Unknown"}
+            </p>
+            <p className="truncate text-xs" style={{ color: "var(--color-fg-secondary)" }}>
+              {replyingTo.type === "image" ? "Photo" : replyingTo.content}
+            </p>
+          </div>
+          <button
+            type="button"
+            aria-label="Cancel reply"
+            onClick={clearReply}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-tertiary)]"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      ) : null}
+      <div className="flex items-end gap-2 px-3 py-3">
       <button
         type="button"
         onClick={placeholderFeature("Attachments")}
@@ -353,6 +396,7 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
           />
         )}
       </button>
+      </div>
     </form>
   );
 }

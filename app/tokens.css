@@ -39,3 +39,29 @@
   --color-status-typing: #2c6bed;
   --color-status-error: #d83a3a;
 }
+
+/*
+ * Phase 8.3 — dark mode values. Applied via `<html data-theme="dark">`,
+ * toggled in Settings → Appearance and persisted to localStorage.
+ * Same token names as :root so component code is theme-agnostic.
+ */
+[data-theme="dark"] {
+  --color-bg-primary: #1b1c1f;
+  --color-bg-secondary: #2a2c2f;
+  --color-bg-tertiary: #3a3d41;
+  --color-bg-elevated: #2f3134;
+  --color-fg-primary: #e9e9e9;
+  --color-fg-secondary: #b0b3b8;
+  --color-fg-muted: #7a7d82;
+  --color-border-subtle: #2a2c2f;
+  --color-border-default: #3a3d41;
+  --color-accent: #5b9dff;
+  --color-accent-fg: #ffffff;
+  --color-bubble-out: #2c5278;
+  --color-bubble-in: #2a2c2f;
+  --color-bubble-out-fg: #ffffff;
+  --color-bubble-out-fg-muted: rgba(255, 255, 255, 0.85);
+  --color-status-online: #3ab27f;
+  --color-status-typing: #5b9dff;
+  --color-status-error: #ff5b5b;
+}

@@ -17,9 +17,9 @@
  *                            `['messages', conversation_id]`. Also
  *                            invalidates `['conversations']` so the
  *                            list-row preview updates.
- *   - `message.read.bulk` → for every cached message with id ≤
- *                            up_to_message_id in the affected
- *                            conversation, set status='read'.
+ *   - `message.delivered` → refreshes sender-side delivery state.
+ *   - `message.read`/`.bulk` → refreshes sender-side read state and
+ *                              seen-by data.
  *   - `typing`            → mutates the realtime store's typing map.
  *   - Unknown types are `console.warn`'d; never throw.
  *
@@ -31,7 +31,7 @@
  * Spec: @task.md §1 ("WS client (lib/realtime.ts)").
  */
 
-import { getQueryClient, queryKeys, type Conversation, type Message, mapBackendStatus } from "./api";
+import { getMessageStatus, getQueryClient, queryKeys, type Conversation, type Message, mapBackendStatus } from "./api";
 import { env } from "./env";
 import { useAuthStore } from "@/store/auth";
 import { useRealtimeStore } from "@/store/realtime";
@@ -69,6 +69,17 @@ interface MessageReadBulk {
   reader_id: number;
   up_to_message_id: number;
 }
+interface MessageDelivered {
+  type: "message.delivered";
+  conversation_id: number;
+  message_id: number;
+  delivered_to: number;
+}
+interface MessageRead {
+  type: "message.read";
+  message_id: number;
+  read_by: number;
+}
 interface ConversationUpdated {
   type: "conversation.updated";
   conversation: Conversation;
@@ -76,6 +87,17 @@ interface ConversationUpdated {
 interface ConversationDeleted {
   type: "conversation.deleted";
   conversation_id: number;
+}
+interface ReactionsUpdate {
+  type: "reactions.update";
+  conversation_id: number;
+  message_id: number;
+  reactions: Message["reactions"];
+}
+interface MessageDelete {
+  type: "message.delete";
+  conversation_id: number;
+  message_id: number;
 }
 
 /** Backend's MessageOut is structurally identical to our `Message`. We
@@ -90,6 +112,7 @@ interface BackendMessageOut {
   created_at?: string;
   parent_id?: number | null;
   attachments?: Message["attachments"];
+  disappear_after_seconds?: number | null;
   status?: string;
 }
 
@@ -259,6 +282,12 @@ function route(msg: IncomingMessage) {
     case "message.new":
       handleMessageNew(msg as unknown as MessageNew);
       break;
+    case "message.delivered":
+      handleMessageDelivered(msg as unknown as MessageDelivered);
+      break;
+    case "message.read":
+      handleMessageRead(msg as unknown as MessageRead);
+      break;
     case "message.read.bulk":
       handleMessageReadBulk(msg as unknown as MessageReadBulk);
       break;
@@ -267,6 +296,12 @@ function route(msg: IncomingMessage) {
       break;
     case "conversation.deleted":
       handleConversationDeleted(msg as unknown as ConversationDeleted);
+      break;
+    case "reactions.update":
+      handleReactionsUpdate(msg as unknown as ReactionsUpdate);
+      break;
+    case "message.delete":
+      handleMessageDelete(msg as unknown as MessageDelete);
       break;
     default:
       console.warn("[realtime] unknown event type:", msg.type);
@@ -320,20 +355,62 @@ function handleMessageNew(msg: MessageNew) {
 
 function handleMessageReadBulk(msg: MessageReadBulk) {
   const qc = getQueryClient();
-  qc.setQueryData<Message[]>(
-    queryKeys.messages(msg.conversation_id),
-    (prev) => {
-      if (!prev) return prev;
-      const upTo = msg.up_to_message_id;
-      return prev.map((m) => {
-        if (m.id <= upTo && m.status !== "read" && m.status !== "sending") {
-          return { ...m, status: "read" as const };
-        }
-        return m;
-      });
-    },
-  );
+  // The backend's read.bulk event payload only carries `reader_id`,
+  // not the reader's User record, so we can't authoritatively
+  // extend `seen_by` client-side. Instead, invalidate the messages
+  // query so the next render pulls a fresh list with the server-
+  // computed `seen_by`. (Phase 8: previously we tried to merge
+  // locally, but the only way to know the reader's display_name +
+  // avatar is to refetch.)
+  //
+  void syncMessageStatuses(msg.conversation_id);
+  void qc.invalidateQueries({ queryKey: queryKeys.messages(msg.conversation_id) });
   void qc.invalidateQueries({ queryKey: queryKeys.conversations });
+}
+
+function handleMessageDelivered(msg: MessageDelivered) {
+  void syncMessageStatuses(msg.conversation_id);
+}
+
+function handleMessageRead(msg: MessageRead) {
+  const qc = getQueryClient();
+  const messageCaches = qc.getQueryCache().findAll({ queryKey: ["messages"] });
+  for (const query of messageCaches) {
+    const conversationId = Number(query.queryKey[1]);
+    const messages = query.state.data as Message[] | undefined;
+    if (!messages?.some((message) => message.id === msg.message_id)) continue;
+    void syncMessageStatuses(conversationId);
+    void qc.invalidateQueries({ queryKey: queryKeys.messages(conversationId) });
+  }
+}
+
+async function syncMessageStatuses(conversationId: number) {
+  const qc = getQueryClient();
+  const messages = qc.getQueryData<Message[]>(queryKeys.messages(conversationId));
+  if (!messages?.length) return;
+  const ids = messages
+    .map((message) => message.id)
+    .filter((id) => Number.isSafeInteger(id) && id > 0);
+  if (!ids.length) return;
+  try {
+    const statuses = await getMessageStatus(conversationId, ids);
+    qc.setQueryData<Message[]>(queryKeys.messages(conversationId), (prev) => {
+      if (!prev) return prev;
+      let changed = false;
+      const rank = { sending: 0, sent: 1, delivered: 2, read: 3, failed: 4 } as const;
+      const next = prev.map((message) => {
+        const status = statuses[String(message.id)];
+        if (!status || status === "unknown") return message;
+        const currentRank = message.status ? rank[message.status] : -1;
+        if (currentRank >= rank[status]) return message;
+        changed = true;
+        return { ...message, status };
+      });
+      return changed ? next : prev;
+    });
+  } catch {
+    // Realtime events are best-effort; the chat-pane hydrates on open.
+  }
 }
 
 function handleConversationUpdated(msg: ConversationUpdated) {
@@ -368,6 +445,42 @@ function handleConversationDeleted(msg: ConversationDeleted) {
   qc.removeQueries({ queryKey: queryKeys.messages(msg.conversation_id) });
 }
 
+/**
+ * Phase 8.2 — replace the `reactions` array on a single message in
+ * its conversation's messages cache. The backend's `reactions.update`
+ * is the authoritative state; the optimistic toggle in
+ * `MessageBubble` is reconciled by this event when it lands.
+ */
+/**
+ * Phase 8.4 — the backend's 30s sweep broadcasts `message.delete`
+ * after it purges expired messages. We drop the row from the
+ * conversation's messages cache; the conversation list cache is
+ * invalidated so unread counts refresh.
+ */
+function handleMessageDelete(msg: MessageDelete) {
+  const qc = getQueryClient();
+  qc.setQueryData<Message[]>(
+    queryKeys.messages(msg.conversation_id),
+    (prev) => (prev ? prev.filter((m) => m.id !== msg.message_id) : prev),
+  );
+  void qc.invalidateQueries({ queryKey: queryKeys.conversations });
+}
+
+function handleReactionsUpdate(msg: ReactionsUpdate) {
+  const qc = getQueryClient();
+  qc.setQueryData<Message[]>(
+    queryKeys.messages(msg.conversation_id),
+    (prev) => {
+      if (!prev) return prev;
+      return prev.map((m) =>
+        m.id === msg.message_id
+          ? { ...m, reactions: msg.reactions ?? [] }
+          : m,
+      );
+    },
+  );
+}
+
 function normalizeIncoming(raw: BackendMessageOut): Message | null {
   if (typeof raw.id !== "number") return null;
   const me = useAuthStore.getState().user;
@@ -390,10 +503,11 @@ function normalizeIncoming(raw: BackendMessageOut): Message | null {
     content: raw.content ?? "",
     type: raw.type ?? "text",
     created_at: raw.created_at ?? new Date().toISOString(),
+    disappear_after_seconds: raw.disappear_after_seconds ?? null,
     parent_id: raw.parent_id ?? null,
     attachments: raw.attachments ?? [],
     status: isMine
-      ? mapBackendStatus(raw.status) ?? "delivered"
+      ? mapBackendStatus(raw.status) ?? "sent"
       : undefined,
   };
   return incoming;

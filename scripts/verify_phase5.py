@@ -11,7 +11,8 @@ Acceptance checks performed:
   AC#1+ AC#2  Alice sends → Bob's message list grows by 1 within ~3s.
   AC#2  Alice's outgoing bubble shows a non-pending status eventually.
   AC#2  Read-on-open → Bob is already on the conversation, so the
-        backend should flip Alice's bubble to 'read' within ~2s.
+        backend should place a single seen marker on Alice's latest
+        message within ~2s.
   AC#4  Closing Bob's context keeps the shell healthy.
   AC#5  Reload preserves Alice's session.
 """
@@ -157,23 +158,25 @@ with sync_playwright() as p:
     # Simpler check: just confirm a status icon made it into the DOM.
     has_status = any(
         page_a.locator(f'section[aria-label^="Chat with"] ul > li:last-child [aria-label="{status}"]').count() > 0
-        for status in ["sent", "delivered", "read"]
-    )
+        for status in ["sent", "delivered", "seen"]
+    ) or page_a.locator(
+        'section[aria-label^="Chat with"] ul > li:last-child [aria-label^="Seen by "]'
+    ).count() > 0
     check("AC#2 outgoing bubble shows a post-pending status", has_status)
 
-    step("AC#2: read-on-open → Alice's last bubble flips to 'read'")
+    step("AC#2: read-on-open → Alice gets a seen marker on the last read message")
     # Bob is already on the conversation; the /read POST should have
     # fired when Bob selected it. WS message.read.bulk should have
     # followed, flipping Alice's bubble to 'read' (the accent double-check).
     try:
         page_a.wait_for_selector(
-            'section[aria-label^="Chat with"] ul > li:last-child [aria-label="read"]',
+            'section[aria-label^="Chat with"] ul > li:last-child [aria-label^="Seen by "]',
             timeout=4000,
         )
-        check("AC#2 Alice's last bubble → 'read'", True)
+        check("AC#2 Alice's latest read message has one seen marker", True)
     except Exception:
-        check("AC#2 Alice's last bubble → 'read'", None,
-              "didn't flip (backend broadcast may not cover this case)")
+        check("AC#2 Alice's latest read message has one seen marker", None,
+              "no seen marker appeared before the timeout")
 
     step("AC#4: close Bob's context → Alice stays healthy")
     ctx_b.close()

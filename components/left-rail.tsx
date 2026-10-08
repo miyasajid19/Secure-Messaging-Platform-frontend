@@ -23,6 +23,7 @@ import { Avatar } from "./avatar";
 import { useAuthStore } from "@/store/auth";
 import { useRouter } from "next/navigation";
 import { performLogout } from "@/lib/auth-actions";
+import { toast } from "sonner";
 
 type RailKey = "chats" | "calls" | "stories" | "settings";
 
@@ -70,7 +71,13 @@ export function LeftRail() {
                 aria-label={label}
                 aria-current={isActive ? "page" : undefined}
                 title={label}
-                onClick={() => setActive(key)}
+                onClick={() => {
+                  if (key === "calls" || key === "stories") {
+                    toast.info(`${label} — coming soon`);
+                    return;
+                  }
+                  setActive(key);
+                }}
                 className="flex h-11 w-11 items-center justify-center rounded-full transition"
                 style={{
                   backgroundColor: isActive

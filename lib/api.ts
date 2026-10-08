@@ -36,6 +36,22 @@ export interface User {
   last_seen: string | null;
 }
 
+// Phase 8.2 — message reactions. The backend groups reactions by
+// emoji and returns the user list (id + display_name + avatar_url) per
+// group. `count` is a denormalised total to avoid summing on the
+// client on every render.
+export interface ReactionUser {
+  id: number;
+  display_name: string | null;
+  avatar_url: string | null;
+}
+
+export interface ReactionGroup {
+  emoji: string;
+  count: number;
+  users: ReactionUser[];
+}
+
 export interface Attachment {
   id: number;
   url: string;
@@ -44,6 +60,19 @@ export interface Attachment {
 }
 
 export type MessageType = "text" | "image" | "system";
+
+// Phase 8.4 — allowed disappearing-message timer values. The
+// backend accepts these seconds values; null disables the timer.
+export type DisappearingTimer = 3600 | 86400 | 604800; // 1h, 24h, 1w
+export const DISAPPEARING_TIMER_OPTIONS: Array<{
+  value: DisappearingTimer | null;
+  label: string;
+}> = [
+  { value: null, label: "Off" },
+  { value: 3600, label: "1 hour" },
+  { value: 86400, label: "24 hours" },
+  { value: 604800, label: "1 week" },
+];
 export type ConversationType = "direct" | "group";
 
 export interface MessagePreview {
@@ -61,16 +90,30 @@ export interface Message {
   content: string;
   type: MessageType;
   created_at: string;
+  /** Timer copied from the conversation when this message was sent. */
+  disappear_after_seconds?: number | null;
   /** Nested user card from the backend's `MessageOut.sender`. */
   sender: User;
   parent_id: number | null;
   attachments: Attachment[];
   /**
-   * Local-only optimistic status. Live messages arrive with `status =
-   * undefined`; bubble component treats that as "delivered" for
-   * outgoing messages. Phase 5's WS events populate this client-side
-   * as sending → sent → delivered → read. `failed` is set on a non-2xx
-   * POST from the composer.
+   * Phase 8 — users who have marked this message as read. Backend
+   * returns an empty array until the first reader; the WS
+   * `message.read.bulk` event (Phase 5) and the `markRead` call
+   * (Phase 5) keep this up to date.
+   */
+  seen_by?: User[];
+  /**
+   * Phase 8.2 — reactions on this message. Live server messages
+   * arrive with the backend's group list. The optimistic toggle in
+   * `MessageBubble` mutates this client-side; the server's WS
+   * `reactions.update` reconciles.
+   */
+  reactions?: ReactionGroup[];
+  /**
+   * Caller-specific delivery/read receipt hydrated from the message-
+   * status endpoint and updated by WebSocket receipts. Optimistic sends
+   * use `sending` and `failed` locally.
    */
   status?: "sending" | "sent" | "delivered" | "read" | "failed";
 }
@@ -100,6 +143,12 @@ export interface Conversation {
   members_can_be_added?: boolean;
   /** Phase 6: the current user's role in this group conversation. */
   role?: "admin" | "member";
+  /** Phase 8.4 — per-conversation disappearing-message timer. One of
+   *  the allowed `DisappearingTimer` values (1h, 24h, 1w) or null
+   *  for "off". The backend runs a sweep every 30s; messages older
+   *  than `now - created_at - disappear_after_seconds` are deleted
+   *  and a `message.delete` WS event is broadcast. */
+  disappear_after_seconds: number | null;
 }
 
 export interface Contact {
@@ -287,6 +336,55 @@ export const searchUsers = (q: string, conversationId?: number) => {
   );
 };
 
+// --- Phase 8.2: reactions (POST body, DELETE path)
+
+/**
+ * Add the current user's reaction with `emoji` to a message. The
+ * backend accepts the emoji in the **body** (not the path) and
+ * returns the new `ReactionGroup` on success. POST is idempotent
+ * at the call site (caller decides whether to fire POST vs DELETE
+ * based on whether the user already has the reaction).
+ */
+export const addReaction = (messageId: number, emoji: string) =>
+  apiFetch<ReactionGroup>(`/messages/${messageId}/reactions`, {
+    method: "POST",
+    body: { emoji },
+  });
+
+/**
+ * Remove the current user's reaction with `emoji`. The emoji is in
+ * the **path** (URL-encoded by apiFetch).
+ */
+export const removeReaction = (messageId: number, emoji: string) =>
+  apiFetch<void>(
+    `/messages/${messageId}/reactions/${encodeURIComponent(emoji)}`,
+    { method: "DELETE" },
+  );
+
+// --- Phase 8.4: disappearing-message timer (PATCH/GET /conversations/{id}/disappearing-timer) -
+
+/**
+ * Set the per-conversation disappearing-message timer. Pass `null`
+ * to disable. The backend runs a sweep every 30s; new outgoing
+ * messages inherit the timer via the conversation's
+ * `disappear_after_seconds`.
+ */
+export const setDisappearingTimer = (
+  conversationId: number,
+  seconds: number | null,
+) =>
+  apiFetch<void>(
+    `/conversations/${conversationId}/disappearing-timer`,
+    { method: "PATCH", body: { disappear_after_seconds: seconds } },
+  );
+
+/** Read the current disappearing-timer value for a conversation. */
+export const getDisappearingTimer = (conversationId: number) =>
+  apiFetch<{ disappear_after_seconds: number | null }>(
+    `/conversations/${conversationId}/disappearing-timer`,
+    { method: "GET" },
+  );
+
 // --- Phase 6: group CRUD + member management -------------------------------
 
 /** `POST /conversations` — create a group. */
@@ -380,18 +478,18 @@ export const getOnlineUsers = () =>
   apiFetch<number[]>("/users/online", { method: "GET" });
 
 /** Map backend's status string (`sending|sent|delivered|read|failed`) to
- *  the value our bubble component uses. The backend's spec only emits
- *  `delivered` and `read`; `sending` and `sent`/`failed` are
- *  client-side states for optimistic UI. */
+ *  the value our bubble component uses. An absent/unknown status means
+ *  we know only that the message was sent; it is not proof of delivery
+ *  or a read receipt. */
 export type BackendMessageStatus = "sending" | "sent" | "delivered" | "read" | "failed";
 export function mapBackendStatus(
   value: string | undefined | null,
 ): Message["status"] | "failed" {
-  if (!value) return "read";
+  if (!value) return "sent";
   if (value === "sending" || value === "sent" || value === "delivered" || value === "read") {
     return value;
   }
-  return "read"; // unknown backend value — treat as fully delivered
+  return "sent"; // Unknown or absent status is not proof the recipient has seen it.
 }
 
 // --- query client + keys ---------------------------------------------------

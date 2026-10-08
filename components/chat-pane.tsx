@@ -26,6 +26,8 @@ import { Avatar } from "./avatar";
 import { GroupInfoModal } from "./group-info-modal";
 import {
   getMe,
+  getMessageStatus,
+  ApiError,
   listConversations,
   listMessages,
   markRead,
@@ -39,6 +41,7 @@ import { useUiStore } from "@/store/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@/store/auth";
 import { useRealtimeStore } from "@/store/realtime";
+import { useReplyStore } from "@/store/reply";
 import { conversationTitle } from "@/lib/conversation-title";
 
 interface Props {
@@ -47,33 +50,26 @@ interface Props {
   onBack?: () => void;
 }
 
+/** Retry transient network/server failures for receipt requests. */
+async function retryTransient<T>(request: () => Promise<T>): Promise<T> {
+  const delays = [250, 750];
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await request();
+    } catch (error) {
+      const retryable =
+        !(error instanceof ApiError) || error.status >= 500;
+      if (!retryable || attempt >= delays.length) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+    }
+  }
+}
+
 export function ChatPane({ showBackButton = false, onBack }: Props) {
   const conversationId = useUiStore((s) => s.selectedConversationId);
   const storedUser = useAuthStore((s) => s.user);
   const typingByConversation = useRealtimeStore((s) => s.typingByConversation);
   const presenceByUser = useRealtimeStore((s) => s.presenceByUser);
-
-  // Read-on-open: when a conversation is selected, post /read for the
-  // latest message id. This both clears the unread badge via the
-  // backend's `message.read.bulk` event and tells the server the user
-  // is "caught up" so future sends get a 'read' tick.
-  useEffect(() => {
-    if (conversationId == null) return;
-    const qc = getQueryClient();
-    const msgs = qc.getQueryData<Message[]>(queryKeys.messages(conversationId)) ?? [];
-    if (msgs.length === 0) return;
-    const latestId = msgs.reduce((max, m) => (m.id > max ? m.id : max), 0);
-    if (!latestId) return;
-    // Fire and forget.
-    void markRead(conversationId, latestId)
-      .then(() => {
-        void qc.invalidateQueries({ queryKey: queryKeys.conversations });
-      })
-      .catch(() => {
-        // If the request fails we still get a graceful read-of-messages
-        // when the WS pushes message.read.bulk later.
-      });
-  }, [conversationId]);
 
   // Re-validate the current user via /auth/me so Composer can render
   // optimistic messages with the right `sender` shape. Falls back to
@@ -109,29 +105,118 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
     staleTime: 10_000,
   });
 
-  // Phase 5 — the compose path now writes directly to the TanStack
-  // Query cache (see composer.tsx). We just keep `extraMessages` as a
-  // belt-and-suspenders for callers that need to push a message
-  // through `onSend` (e.g. a future Cmd+K send shortcut).
-  const [extraMessages, setExtraMessages] = useState<Message[]>([]);
+  // Read-on-open must wait for the messages query: on a hard refresh the
+  // cache is empty when the conversation id changes, so an effect keyed
+  // only on conversationId silently skips the read receipt. Re-run when
+  // newer messages arrive while this chat is active as well.
+  const latestMessageId = messagesQuery.data?.reduce(
+    (latest, message) =>
+      Number.isSafeInteger(message.id) ? Math.max(latest, message.id) : latest,
+    0,
+  ) ?? 0;
   useEffect(() => {
-    setExtraMessages([]);
-  }, [conversationId]);
+    if (conversationId == null || latestMessageId <= 0) return;
+    const qc = getQueryClient();
+    let cancelled = false;
+    const markLatestRead = () => retryTransient(() => markRead(conversationId, latestMessageId));
+    void markLatestRead()
+      .then(() => {
+        if (!cancelled) void qc.invalidateQueries({ queryKey: queryKeys.conversations });
+      })
+      .catch(() => {
+        // A focus/online event retries this if the first request failed.
+      });
+    const retryRead = () => {
+      void markLatestRead().then(() => {
+        if (!cancelled) void qc.invalidateQueries({ queryKey: queryKeys.conversations });
+      }).catch(() => {});
+    };
+    window.addEventListener("focus", retryRead);
+    window.addEventListener("online", retryRead);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", retryRead);
+      window.removeEventListener("online", retryRead);
+    };
+  }, [conversationId, latestMessageId]);
+
+  // MessageOut does not contain caller-specific delivery receipts.
+  // Hydrate them when this chat's cached timeline changes so old
+  // outgoing messages keep the right tick after a refresh/reconnect.
+  useEffect(() => {
+    if (conversationId == null || !messagesQuery.data?.length) return;
+    const ids = messagesQuery.data
+      .map((message) => message.id)
+      .filter((id) => Number.isSafeInteger(id) && id > 0);
+    if (!ids.length) return;
+    let cancelled = false;
+    const hydrateStatuses = () => retryTransient(() => getMessageStatus(conversationId, ids))
+      .then((statuses) => {
+        if (cancelled) return;
+        const rank = { sending: 0, sent: 1, delivered: 2, read: 3, failed: 4 } as const;
+        const qc = getQueryClient();
+        qc.setQueryData<Message[]>(queryKeys.messages(conversationId), (prev) => {
+          if (!prev) return prev;
+          let changed = false;
+          const next = prev.map((message) => {
+            const status = statuses[String(message.id)];
+            if (!status || status === "unknown") return message;
+            const currentRank = message.status ? rank[message.status] : -1;
+            if (currentRank >= rank[status]) return message;
+            changed = true;
+            return { ...message, status };
+          });
+          return changed ? next : prev;
+        });
+      })
+      .catch(() => {
+        // Keep rendering the timeline; focus/online will retry hydration.
+      });
+    const refreshStatuses = () => { void hydrateStatuses(); };
+    void hydrateStatuses();
+    window.addEventListener("focus", refreshStatuses);
+    window.addEventListener("online", refreshStatuses);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", refreshStatuses);
+      window.removeEventListener("online", refreshStatuses);
+    };
+  }, [conversationId, messagesQuery.data]);
+
+  // The compose path writes directly to the TanStack Query cache
+  // (see composer.tsx). The React Query cache is the single source
+  // of truth for the message list — no separate local-overlay
+  // state. (Phase 7 left extraMessages as belt-and-suspenders, but
+  // it caused duplicates after the WS `message.new` broadcast
+  // returned the canonical message, so it was removed in Phase 8.)
+  const extraMessages: Message[] = [];
 
   const allMessages = useMemo(() => {
     if (!conversationId) return [];
-    const fromServer = messagesQuery.data ?? [];
-    const local = extraMessages.filter(
-      (m) => m.conversation_id === conversationId,
-    );
-    return [...fromServer, ...local].sort(
-      (a, b) =>
-        new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
-    );
-  }, [conversationId, messagesQuery.data, extraMessages]);
+    return (messagesQuery.data ?? []).slice();
+  }, [conversationId, messagesQuery.data]);
 
-  function handleSend(msg: Message) {
-    setExtraMessages((prev) => [...prev, msg]);
+  // Read receipts are cumulative. Keep each reader's avatar on only
+  // the newest outgoing message they've seen, rather than repeating
+  // it under every earlier message (for both direct and group chats).
+  const lastSeenMessageByUser = useMemo(() => {
+    const lastSeen = new Map<number, number>();
+    if (myUserId == null) return lastSeen;
+    for (const message of allMessages) {
+      if (message.sender_id !== myUserId) continue;
+      for (const reader of message.seen_by ?? []) {
+        const previous = lastSeen.get(reader.id) ?? 0;
+        if (message.id > previous) lastSeen.set(reader.id, message.id);
+      }
+    }
+    return lastSeen;
+  }, [allMessages, conversation?.type, myUserId]);
+
+  // The composer no longer routes optimistic messages through
+  // `onSend`; it writes directly to the React Query cache. The
+  // signature is kept for API compatibility with `<Composer>`.
+  function handleSend(_msg: Message) {
+    /* no-op: composer writes to the React Query cache directly. */
   }
 
   // Retry a previously-failed outgoing bubble by re-issuing the POST
@@ -189,6 +274,18 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [pendingNewCount, setPendingNewCount] = useState(0);
   const lastSeenMessageIdRef = useRef<number | null>(null);
+  // Phase 8.1 — when the user switches conversations, wipe the
+  // reply state so the new conversation doesn't render a stale
+  // quoted parent. Declared BEFORE the empty-state early return so
+  // Rules of Hooks are satisfied across the conversationId null ↔
+  // defined transition.
+  const lastConvIdForReply = useRef<number | null>(null);
+  useEffect(() => {
+    if (lastConvIdForReply.current !== null && lastConvIdForReply.current !== conversationId) {
+      useReplyStore.getState().clear();
+    }
+    lastConvIdForReply.current = conversationId;
+  }, [conversationId]);
   // Force-scroll to bottom (e.g. on conversation change, or when the
   // current user sends a message). Bypasses the smart-scroll logic.
   const forceScrollToBottom = useRef(false);
@@ -389,9 +486,7 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
         subtitle={displaySubtitle}
         showBackButton={showBackButton}
         onBack={onBack}
-        onTitleClick={
-          conv.type === "group" ? () => setGroupInfoOpen(true) : undefined
-        }
+        onTitleClick={() => setGroupInfoOpen(true)}
       />
 
       <div
@@ -444,6 +539,13 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
                 ) : (
                   <MessageBubble
                     message={m}
+                    seenBy={
+                      myUserId !== null && m.sender_id === myUserId
+                        ? (m.seen_by ?? []).filter(
+                            (reader) => lastSeenMessageByUser.get(reader.id) === m.id,
+                          )
+                        : m.seen_by
+                    }
                     isOutgoing={myUserId !== null && m.sender_id === myUserId}
                     showSenderHeader={
                       conv.type === "group" &&
@@ -451,6 +553,14 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
                       m.sender_id !== myUserId
                     }
                     onRetry={retrySend}
+                    isGroup={conv.type === "group"}
+                    recipientOnline={conv.type === "direct" && otherOnline}
+                    parent={
+                      m.parent_id != null
+                        ? (allMessages.find((x) => x.id === m.parent_id) ?? null)
+                        : null
+                    }
+                    currentUserId={myUserId}
                   />
                 )}
               </li>
@@ -465,14 +575,12 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
         onSend={handleSend}
       />
 
-      {conv.type === "group" ? (
-        <GroupInfoModal
-          open={groupInfoOpen}
-          onClose={() => setGroupInfoOpen(false)}
-          conversation={conv}
-          currentUserId={myUserId}
-        />
-      ) : null}
+      <GroupInfoModal
+        open={groupInfoOpen}
+        onClose={() => setGroupInfoOpen(false)}
+        conversation={conv}
+        currentUserId={myUserId}
+      />
     </section>
   );
 }
@@ -562,7 +670,7 @@ function ChatHeader({
         className={`flex min-w-0 flex-1 flex-col text-left ${
           onTitleClick ? "cursor-pointer hover:underline" : "cursor-default"
         }`}
-        aria-label={onTitleClick ? "Open group info" : undefined}
+          aria-label={onTitleClick ? "Open conversation info" : undefined}
       >
         <span className="truncate text-base font-semibold text-[var(--color-fg-primary)]">
           {title}
@@ -574,10 +682,18 @@ function ChatHeader({
       <IconBtn aria-label="Search in conversation">
         <Search size={18} />
       </IconBtn>
-      <IconBtn aria-label="Voice call">
+      <IconBtn
+        aria-label="Voice call — coming soon"
+        title="Voice calls — coming soon"
+        onClick={() => toast.info("Voice calls — coming soon")}
+      >
         <Phone size={18} />
       </IconBtn>
-      <IconBtn aria-label="Video call">
+      <IconBtn
+        aria-label="Video call — coming soon"
+        title="Video calls — coming soon"
+        onClick={() => toast.info("Video calls — coming soon")}
+      >
         <Video size={18} />
       </IconBtn>
     </header>

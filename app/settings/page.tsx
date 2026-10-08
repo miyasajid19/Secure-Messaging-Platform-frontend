@@ -13,6 +13,7 @@
  */
 
 import { Suspense, useEffect, useState, type FormEvent } from "react";
+import { useTheme } from "@/lib/theme";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, Bell, Lock, Sun, User as UserIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -275,6 +276,8 @@ function PrivacyPanel() {
           { label: "Read receipts", desc: "Let others know when you've read their messages." },
           { label: "Typing indicators", desc: "Show others when you're typing." },
           { label: "Blocked users", desc: "Manage users you've blocked." },
+          { label: "Linked devices", desc: "View and manage devices signed in to your account." },
+          { label: "End-to-end encryption", desc: "Keep conversations private between participants." },
         ].map((item) => (
           <li
             key={item.label}
@@ -288,10 +291,12 @@ function PrivacyPanel() {
             </div>
             <button
               type="button"
-              onClick={() => toast.info(`${item.label} — coming soon`)}
-              className="rounded px-3 py-1 text-xs text-[var(--color-accent)] hover:bg-[var(--color-bg-tertiary)]"
+              disabled
+              aria-label={`${item.label} — coming soon`}
+              className="shrink-0 cursor-not-allowed rounded-full border px-3 py-1 text-xs text-[var(--color-fg-muted)]"
+              style={{ borderColor: "var(--color-border-subtle)" }}
             >
-              Open
+              Coming soon
             </button>
           </li>
         ))}
@@ -375,6 +380,12 @@ function NotificationsPanel() {
 }
 
 function AppearancePanel() {
+  // Phase 8.3 — two-button theme switch. `useTheme` reads/writes
+  // localStorage and applies the data-theme attribute. The buttons
+  // live-update `document.documentElement.dataset.theme` via setTheme,
+  // so the entire UI flips instantly with no page reload.
+  const { theme, setTheme } = useTheme();
+  const isDark = theme === "dark";
   return (
     <div className="flex max-w-[480px] flex-col gap-3" aria-label="Appearance">
       <h2 className="text-base font-semibold text-[var(--color-fg-primary)]">
@@ -384,22 +395,37 @@ function AppearancePanel() {
         className="rounded-lg border px-4 py-3"
         style={{ borderColor: "var(--color-border-subtle)" }}
       >
-        <div className="flex items-center justify-between">
-          <p className="text-sm font-medium text-[var(--color-fg-primary)]">
-            Theme
-          </p>
-          <span
-            className="rounded-full px-2 py-0.5 text-xs font-semibold"
-            style={{
-              backgroundColor: "var(--color-accent)",
-              color: "var(--color-accent-fg)",
-            }}
-          >
-            Light (active)
-          </span>
+        <p className="mb-2 text-sm font-medium text-[var(--color-fg-primary)]">
+          Theme
+        </p>
+        <div role="group" aria-label="Theme" className="flex gap-2">
+          {(["light", "dark"] as const).map((value) => {
+            const active = theme === value;
+            return (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setTheme(value)}
+                aria-pressed={active}
+                className="flex-1 rounded-lg px-3 py-2 text-sm font-semibold transition disabled:cursor-not-allowed"
+                style={{
+                  backgroundColor: active
+                    ? "var(--color-accent)"
+                    : "var(--color-bg-tertiary)",
+                  color: active
+                    ? "var(--color-accent-fg)"
+                    : "var(--color-fg-primary)",
+                }}
+              >
+                {value === "light" ? "Light" : "Dark"}
+              </button>
+            );
+          })}
         </div>
-        <p className="mt-1 text-xs text-[var(--color-fg-muted)]">
-          Dark mode coming soon.
+        <p className="mt-2 text-xs text-[var(--color-fg-muted)]">
+          {isDark
+            ? "Dark mode is on. Tokens in app/tokens.css flip automatically."
+            : "Light mode is on. Switch to Dark in one click."}
         </p>
       </div>
     </div>

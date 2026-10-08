@@ -1,0 +1,7 @@
+--- a/task.md
++++ b/task.md
+@@ -219,4 +219,4 @@
+ - all prior verify scripts still pass (don't regress).
+ 
+ ## Status
+-_(to be filled by frontend agent)_

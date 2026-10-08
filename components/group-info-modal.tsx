@@ -27,6 +27,7 @@ import {
   LogOut,
   Search,
   Shield,
+  Timer,
   Trash2,
   UserMinus,
   UserPlus,
@@ -43,6 +44,8 @@ import {
   queryKeys,
   removeMember,
   searchUsers,
+  setDisappearingTimer,
+  DISAPPEARING_TIMER_OPTIONS,
   type Conversation,
   type User,
   type UserSearchResult,
@@ -110,6 +113,32 @@ export function GroupInfoModal({
   const refresh = () =>
     void queryClient.invalidateQueries({ queryKey: queryKeys.conversations });
 
+  const timerMutation = useMutation({
+    mutationFn: (seconds: number | null) =>
+      setDisappearingTimer(conversation.id, seconds),
+    onMutate: async (seconds) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.conversations });
+      const previous = queryClient.getQueryData<Conversation[]>(queryKeys.conversations);
+      queryClient.setQueryData<Conversation[]>(queryKeys.conversations, (items) =>
+        items?.map((item) => item.id === conversation.id
+          ? { ...item, disappear_after_seconds: seconds }
+          : item),
+      );
+      return { previous };
+    },
+    onSuccess: () => {
+      toast.success("Disappearing message timer updated");
+    },
+    onError: (err, _seconds, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(queryKeys.conversations, context.previous);
+      }
+      const msg = err instanceof ApiError ? err.message : "Couldn't update timer";
+      toast.error(msg);
+    },
+    onSettled: refresh,
+  });
+
   const addMutation = useMutation({
     mutationFn: (userId: number) => addMember(conversation.id, userId),
     onSuccess: (data) => {
@@ -166,7 +195,7 @@ export function GroupInfoModal({
     <div
       role="dialog"
       aria-modal="true"
-      aria-label={`Group info for ${conversation.name ?? "this group"}`}
+      aria-label={`${conversation.type === "group" ? "Group" : "Contact"} info for ${conversation.name ?? "this conversation"}`}
       className="fixed inset-0 z-50 flex items-center justify-center px-4"
       style={{ backgroundColor: "rgba(0,0,0,0.35)" }}
       onClick={(e) => {
@@ -181,8 +210,8 @@ export function GroupInfoModal({
           className="flex items-center justify-between border-b px-4 py-3"
           style={{ borderColor: "var(--color-border-subtle)" }}
         >
-          <h2 className="flex items-center gap-2 text-base font-semibold text-[var(--color-fg-primary)]">
-            <Users size={16} /> Group info
+            <h2 className="flex items-center gap-2 text-base font-semibold text-[var(--color-fg-primary)]">
+            {conversation.type === "group" ? <Users size={16} /> : <UserPlus size={16} />} {conversation.type === "group" ? "Group info" : "Contact info"}
           </h2>
           <button
             type="button"
@@ -195,6 +224,30 @@ export function GroupInfoModal({
         </header>
 
         <div className="overflow-y-auto p-4">
+          <section className="mb-4 rounded-xl border p-3" style={{ borderColor: "var(--color-border-subtle)" }}>
+            <div className="flex items-center gap-2 text-sm font-medium text-[var(--color-fg-primary)]">
+              <Timer size={15} /> Disappearing messages
+            </div>
+            <p className="mt-1 text-xs text-[var(--color-fg-muted)]">
+              {conversation.disappear_after_seconds == null
+                ? "Off"
+                : `Messages disappear after ${DISAPPEARING_TIMER_OPTIONS.find((option) => option.value === conversation.disappear_after_seconds)?.label ?? "a set time"}`}
+            </p>
+            <label className="mt-2 block">
+              <span className="sr-only">Disappearing messages timer</span>
+              <select
+                value={conversation.disappear_after_seconds ?? ""}
+                disabled={timerMutation.isPending}
+                onChange={(event) => timerMutation.mutate(event.target.value ? Number(event.target.value) : null)}
+                className="w-full rounded-lg border bg-[var(--color-bg-secondary)] px-3 py-2 text-sm text-[var(--color-fg-primary)] outline-none focus:ring-2 focus:ring-[var(--color-accent)] disabled:opacity-60"
+                style={{ borderColor: "var(--color-border-subtle)" }}
+              >
+                {DISAPPEARING_TIMER_OPTIONS.map((option) => (
+                  <option key={option.label} value={option.value ?? ""}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+          </section>
           {/* Group name (editable if admin) */}
           <section className="mb-4">
             <label className="block text-xs font-medium text-[var(--color-fg-secondary)]">
