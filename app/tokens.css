@@ -1,39 +1,39 @@
 /*
- * Signal palette tokens (placeholder).
+ * Signal palette tokens — LIGHT theme (locked decision #8).
  *
- * Real values land in Phase 3 once we've screenshotted Signal and picked
- * the exact greys/accents. For now this file reserves the token namespace
- * so component code can already reference `var(--color-bg-primary)` etc.
- * without future renames.
+ * This file is the single source of truth for the Signal look. Phase 3
+ * components reference these via `var(--color-…)` in inline styles so the
+ * palette can shift without touching component code. Tailwind v4's @theme
+ * block can later expose these as utility tokens.
  *
  * Naming convention: <group>-<role>-<modifier?>
- * Groups we expect: bg, fg, border, accent, status, shadow.
+ * Groups: bg, fg, border, accent, bubble, status.
  */
 
 :root {
-  /* Surfaces (dark-first; Signal is dark by default) */
-  --color-bg-primary: #1b1c1f;     /* app shell */
-  --color-bg-secondary: #2a2c2f;   /* panes (conversation list, chat) */
-  --color-bg-tertiary: #3a3d41;    /* hover / selected rows */
-  --color-bg-elevated: #2f3134;    /* composer / modals */
+  /* Surfaces (light; Signal Web / Desktop is light-first in v1) */
+  --color-bg-primary: #ffffff;     /* app shell */
+  --color-bg-secondary: #f5f5f7;   /* panes */
+  --color-bg-tertiary: #e9e9ec;    /* hover / selected */
+  --color-bg-elevated: #ffffff;    /* composer / modals */
 
   /* Foreground */
-  --color-fg-primary: #e9e9e9;
-  --color-fg-secondary: #b0b3b8;
-  --color-fg-muted: #7a7d82;
+  --color-fg-primary: #1b1c1f;
+  --color-fg-secondary: #5a5d62;
+  --color-fg-muted: #8a8d92;
 
   /* Borders / dividers */
-  --color-border-subtle: #2a2c2f;
-  --color-border-default: #3a3d41;
+  --color-border-subtle: #ebebef;
+  --color-border-default: #d8d8de;
 
-  /* Accents (Signal uses a desaturated blue for outgoing bubbles/links) */
-  --color-accent: #5b9dff;
+  /* Accents (Signal uses #2c6bed for call-to-action blue) */
+  --color-accent: #2c6bed;
   --color-accent-fg: #ffffff;
-  --color-bubble-out: #2c5278;     /* outgoing message bubble */
-  --color-bubble-in: #2a2c2f;      /* incoming message bubble */
+  --color-bubble-out: #2c6bed;     /* outgoing message bubble */
+  --color-bubble-in: #f0f0f3;      /* incoming message bubble */
 
-  /* Status (typing indicators, online dot, etc.) */
-  --color-status-online: #3ab27f;
-  --color-status-typing: #5b9dff;
-  --color-status-error: #ff5b5b;
+  /* Status (typing indicators, online dot, errors) */
+  --color-status-online: #25d366;
+  --color-status-typing: #2c6bed;
+  --color-status-error: #d83a3a;
 }
