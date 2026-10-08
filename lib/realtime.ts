@@ -35,6 +35,7 @@ import { getQueryClient, queryKeys, type Conversation, type Message, mapBackendS
 import { env } from "./env";
 import { useAuthStore } from "@/store/auth";
 import { useRealtimeStore } from "@/store/realtime";
+import { useUiStore } from "@/store/ui";
 
 // --- incoming wire types --------------------------------------------------
 
@@ -67,6 +68,14 @@ interface MessageReadBulk {
   conversation_id: number;
   reader_id: number;
   up_to_message_id: number;
+}
+interface ConversationUpdated {
+  type: "conversation.updated";
+  conversation: Conversation;
+}
+interface ConversationDeleted {
+  type: "conversation.deleted";
+  conversation_id: number;
 }
 
 /** Backend's MessageOut is structurally identical to our `Message`. We
@@ -190,6 +199,7 @@ function connectInternal(token: string, attemptId: number) {
     state.socket = null;
     state.connecting = false;
     state.connectedToken = null;
+    markWsOffline();
     if (wasCurrent) scheduleReconnect(token, attemptId);
   });
 
@@ -210,6 +220,13 @@ export function disconnect() {
   state.connecting = false;
   state.connectedToken = null;
   useRealtimeStore.getState().clear();
+}
+
+/** Internal: reset wsReady to false (used on close + reconnect). */
+function markWsOffline() {
+  if (useRealtimeStore.getState().wsReady) {
+    useRealtimeStore.getState().setWsReady(false);
+  }
 }
 
 /** Send a JSON payload over the open socket. Returns false if not
@@ -245,6 +262,12 @@ function route(msg: IncomingMessage) {
     case "message.read.bulk":
       handleMessageReadBulk(msg as unknown as MessageReadBulk);
       break;
+    case "conversation.updated":
+      handleConversationUpdated(msg as unknown as ConversationUpdated);
+      break;
+    case "conversation.deleted":
+      handleConversationDeleted(msg as unknown as ConversationDeleted);
+      break;
     default:
       console.warn("[realtime] unknown event type:", msg.type);
   }
@@ -254,6 +277,11 @@ function handlePresenceSnapshot(msg: PresenceSnapshot) {
   useRealtimeStore
     .getState()
     .setPresenceSnapshot(Array.isArray(msg.online_user_ids) ? msg.online_user_ids : []);
+  // The server emits `presence.snapshot` immediately after registering
+  // the socket, so receiving it is our signal that the WS is fully
+  // ready. Mark wsReady so the composer can stop disabling the send
+  // button (Phase 6 spec §1 — UI-send race fix).
+  useRealtimeStore.getState().setWsReady(true);
 }
 
 function handlePresence(msg: Presence) {
@@ -275,7 +303,17 @@ function handleMessageNew(msg: MessageNew) {
   if (!m) return;
   qc.setQueryData<Message[]>(
     queryKeys.messages(m.conversation_id),
-    (prev) => (prev ? [...prev, m] : [m]),
+    (prev) => {
+      if (!prev) return [m];
+      // Idempotent append: if the cache already has a row with this
+      // server id (either from a prior WS broadcast or from the
+      // composer's POST-success replace), don't add a duplicate.
+      // The composer also dedups on its end, but redundant dedup
+      // here means a missed composer replace can never bubble up to
+      // a UI double-render.
+      if (prev.some((row) => row.id === m.id)) return prev;
+      return [...prev, m];
+    },
   );
   void qc.invalidateQueries({ queryKey: queryKeys.conversations });
 }
@@ -296,6 +334,38 @@ function handleMessageReadBulk(msg: MessageReadBulk) {
     },
   );
   void qc.invalidateQueries({ queryKey: queryKeys.conversations });
+}
+
+function handleConversationUpdated(msg: ConversationUpdated) {
+  const qc = getQueryClient();
+  const updated = msg.conversation;
+  // Patch the conversation list cache in place.
+  qc.setQueryData<Conversation[] | undefined>(
+    queryKeys.conversations,
+    (prev) => {
+      if (!prev) return prev;
+      const exists = prev.find((c) => c.id === updated.id);
+      if (!exists) {
+        // A group was just created on another tab — append it.
+        return [updated, ...prev];
+      }
+      return prev.map((c) => (c.id === updated.id ? updated : c));
+    },
+  );
+}
+
+function handleConversationDeleted(msg: ConversationDeleted) {
+  const qc = getQueryClient();
+  qc.setQueryData<Conversation[] | undefined>(
+    queryKeys.conversations,
+    (prev) => (prev ? prev.filter((c) => c.id !== msg.conversation_id) : prev),
+  );
+  // Phase 6 spec §10: navigate away from a deleted conversation.
+  if (useUiStore.getState().selectedConversationId === msg.conversation_id) {
+    useUiStore.getState().setSelected(null);
+  }
+  // Drop its message cache so re-selection doesn't show stale rows.
+  qc.removeQueries({ queryKey: queryKeys.messages(msg.conversation_id) });
 }
 
 function normalizeIncoming(raw: BackendMessageOut): Message | null {

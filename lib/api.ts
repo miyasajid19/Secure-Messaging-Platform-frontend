@@ -76,13 +76,19 @@ export interface Message {
 }
 
 // --- types (mirror backend's UserOut + Phase 4 schemas) --------------------
+export interface ConversationParticipantWithRole extends User {
+  /** Phase 6: 'admin' for groups, undefined for direct. */
+  role?: "admin" | "member";
+}
+
 export interface Conversation {
   id: number;
   type: ConversationType;
   name: string | null;
   created_at: string;
-  /** Backend populates with ALL participants (including current user). */
-  participants: User[];
+  /** Backend populates with ALL participants (including current user).
+   *  Phase 6: each participant may carry a `role` for groups. */
+  participants: ConversationParticipantWithRole[];
   last_message: MessagePreview | null;
   last_message_at: string | null;
   unread_count: number;
@@ -90,6 +96,10 @@ export interface Conversation {
    *  generated initials avatar (group). Optional — older seeded rows
    *  may be missing this field. */
   avatar_url: string | null;
+  /** Phase 6: `true` for groups (admin-allowed), `false` for directs. */
+  members_can_be_added?: boolean;
+  /** Phase 6: the current user's role in this group conversation. */
+  role?: "admin" | "member";
 }
 
 export interface Contact {
@@ -197,6 +207,20 @@ export const updateProfile = (patch: ProfilePatch) =>
     body: patch,
   });
 
+/**
+ * Best-effort call to the backend's logout endpoint (closes WS +
+ * bumps `last_seen`). Errors are swallowed — the local cache clears
+ * even if the request fails (offline, server down, endpoint not
+ * deployed yet, etc.).
+ */
+export async function logout(): Promise<void> {
+  try {
+    await apiFetch<void>("/auth/logout", { method: "POST" });
+  } catch {
+    // intentional: best-effort. See task.md §2.
+  }
+}
+
 // --- Phase 4 read + contacts endpoints --------------------------------------
 
 export interface RequestOtpResponse {
@@ -249,14 +273,68 @@ export const addContact = (phone: string) =>
     body: { phone },
   });
 
-/** `GET /users/search?q=`. Empty `q` returns `[]` per backend contract. */
-export const searchUsers = (q: string) =>
-  apiFetch<UserSearchResult[]>(
-    `/users/search${q ? `?q=${encodeURIComponent(q)}` : ""}`,
+/** `GET /users/search?q=&conversation_id=`. Empty `q` returns `[]` per
+ *  backend contract. Pass `conversationId` to scope the `already_member`
+ *  flag (Phase 6 group add-member flow). */
+export const searchUsers = (q: string, conversationId?: number) => {
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  if (conversationId != null) params.set("conversation_id", String(conversationId));
+  const qs = params.toString();
+  return apiFetch<UserSearchResult[]>(
+    `/users/search${qs ? `?${qs}` : ""}`,
     { method: "GET" },
   );
+};
 
-// --- Phase 5: send + read receipts + presence -------------------------------
+// --- Phase 6: group CRUD + member management -------------------------------
+
+/** `POST /conversations` — create a group. */
+export interface CreateGroupBody {
+  type: "group";
+  name: string;
+  member_ids: number[];
+}
+export interface CreateGroupResponse {
+  conversation: Conversation;
+}
+export const createGroup = (body: CreateGroupBody) =>
+  apiFetch<Conversation>("/conversations", {
+    method: "POST",
+    body,
+  });
+
+/** `POST /conversations/{id}/members` — admin only; adds a user. */
+export interface AddMemberResponse {
+  added: User;
+}
+export const addMember = (conversationId: number, userId: number) =>
+  apiFetch<AddMemberResponse>(
+    `/conversations/${conversationId}/members`,
+    { method: "POST", body: { user_id: userId } },
+  );
+
+/** `DELETE /conversations/{id}/members/{uid}` — admin only; 204 No Content. */
+export const removeMember = (conversationId: number, userId: number) =>
+  apiFetch<void>(
+    `/conversations/${conversationId}/members/${userId}`,
+    { method: "DELETE" },
+  );
+
+/** `PATCH /conversations/{id}/members/{uid}` — admin only; change role. */
+export const promoteMember = (
+  conversationId: number,
+  userId: number,
+  role: "admin" | "member",
+) =>
+  apiFetch<void>(
+    `/conversations/${conversationId}/members/${userId}`,
+    { method: "PATCH", body: { role } },
+  );
+
+/** `DELETE /conversations/{id}` — admin only; cascade-deletes the group. */
+export const deleteGroup = (conversationId: number) =>
+  apiFetch<void>(`/conversations/${conversationId}`, { method: "DELETE" });
 
 /** Body for `POST /conversations/{id}/messages`. */
 export interface SendMessageBody {
@@ -320,8 +398,24 @@ export function mapBackendStatus(
 
 let client: QueryClient | null = null;
 
+/**
+ * Bind the singleton QueryClient. `Providers` calls this once on mount
+ * with the React-context client — so `getQueryClient()` and `useQuery`
+ * agree on which store to read from. Without this binding the WS
+ * handler's `setQueryData` writes to a *different* client than the
+ * one React subscribes to via `<QueryClientProvider>`, which is why
+ * incoming `message.new` events don't update the UI without a refresh.
+ */
+export function setQueryClient(c: QueryClient): void {
+  client = c;
+}
+
 export function getQueryClient(): QueryClient {
   if (client) return client;
+  // Lazy fallback for callers (e.g. error toasts) that fire before
+  // `Providers` has mounted. The returned client is not the same as
+  // the React-context one — those callers should not be doing cache
+  // mutations; this branch exists mainly so module load doesn't throw.
   client = new QueryClient({
     defaultOptions: {
       queries: {

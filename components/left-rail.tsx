@@ -22,6 +22,7 @@ import {
 import { Avatar } from "./avatar";
 import { useAuthStore } from "@/store/auth";
 import { useRouter } from "next/navigation";
+import { performLogout } from "@/lib/auth-actions";
 
 type RailKey = "chats" | "calls" | "stories" | "settings";
 
@@ -35,7 +36,6 @@ const railIcons: Array<{ key: RailKey; label: string; Icon: typeof MessageCircle
 export function LeftRail() {
   const [active, setActive] = useState<RailKey>("chats");
   const router = useRouter();
-  const clear = useAuthStore((s) => s.clear);
   const storedUser = useAuthStore((s) => s.user);
   // Phase 4 keeps the rail presentational; the avatar subject falls back
   // to a generic "?" if the user isn't hydrated yet (briefly, on first
@@ -48,8 +48,7 @@ export function LeftRail() {
     };
 
   function logout() {
-    clear();
-    router.replace("/auth/phone");
+    void performLogout(router);
   }
 
   return (

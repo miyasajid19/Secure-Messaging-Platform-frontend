@@ -15,6 +15,14 @@ import { create } from "zustand";
 interface RealtimeState {
   typingByConversation: Record<number, Record<number, true>>;
   presenceByUser: Record<number, boolean>;
+  /**
+   * True once the WS has fully registered (i.e. we've received the
+   * `presence.snapshot` the server sends on connect). Used by the
+   * composer to gate sends: until WS is ready, outgoing POSTs would
+   * race the broadcast and the sender's own message would be lost
+   * (Phase 5 race). Phase 6 spec §1.
+   */
+  wsReady: boolean;
 
   // typing
   setTypingStart: (conversationId: number, userId: number) => void;
@@ -25,12 +33,17 @@ interface RealtimeState {
   // presence
   setPresence: (userId: number, online: boolean) => void;
   setPresenceSnapshot: (ids: number[]) => void;
+
+  // ws lifecycle
+  setWsReady: (ready: boolean) => void;
+
   clear: () => void;
 }
 
 export const useRealtimeStore = create<RealtimeState>((set, get) => ({
   typingByConversation: {},
   presenceByUser: {},
+  wsReady: false,
 
   setTypingStart: (conversationId, userId) => {
     set((s) => ({
@@ -96,10 +109,15 @@ export const useRealtimeStore = create<RealtimeState>((set, get) => ({
     });
   },
 
+  setWsReady: (ready) => {
+    set({ wsReady: ready });
+  },
+
   clear: () => {
     set(() => ({
       typingByConversation: {},
       presenceByUser: {},
+      wsReady: false,
     }));
   },
 }));

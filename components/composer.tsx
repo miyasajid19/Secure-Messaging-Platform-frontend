@@ -28,7 +28,7 @@ import {
   useState,
   type FormEvent,
 } from "react";
-import { Paperclip, Send, Smile } from "lucide-react";
+import { Loader2, Paperclip, Send, Smile } from "lucide-react";
 import { toast } from "sonner";
 import {
   ApiError,
@@ -38,6 +38,7 @@ import {
 } from "@/lib/api";
 import { getQueryClient, queryKeys } from "@/lib/api";
 import { send as realtimeSend } from "@/lib/realtime";
+import { useRealtimeStore } from "@/store/realtime";
 
 interface Props {
   conversationId: number | null;
@@ -54,6 +55,10 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
   const [value, setValue] = useState("");
   const [composing, setComposing] = useState(false);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
+  // wsReady gates sends per Phase 6 §1: we never POST a message
+  // before the WS has finished registering, otherwise the sender
+  // won't get the broadcast and the bubble appears nowhere.
+  const wsReady = useRealtimeStore((s) => s.wsReady);
 
   // Auto-grow up to MAX_ROWS.
   useEffect(() => {
@@ -212,20 +217,25 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
         type: "text",
         parent_id: null,
       });
-      // Replace optimistic with server message.
+      // Replace optimistic with server message. Idempotent: if the
+      // server's WS `message.new` has already pushed the same id (it
+      // does, since the sender is a participant), dedup instead of
+      // appending a second copy.
       qc.setQueryData<Message[]>(
         queryKeys.messages(conversationId),
         (prev) => {
           if (!prev) return [real];
-          return prev.map((m) =>
-            Object.is(m.id, optimistic.id) ||
-            // Compare by created_at + content as a fallback, since we
-            // synthesised non-numeric ids optimistically.
-            (m.content === real.content && m.sender_id === real.sender_id &&
-             m.created_at === optimistic.created_at)
-              ? real
-              : m,
-          );
+          // Drop any prior copy of this server id AND our local
+          // optimistic row (status === "sending"), then append the
+          // canonical server row. Handles all three races:
+          //   - WS `message.new` already pushed the real before
+          //     POST returned
+          //   - POST returned before WS pushed (we already replaced
+          //     the optimistic; WS appends a dup if we didn't filter)
+          //   - Optimistic still in cache (id=NaN, status="sending")
+          const without =
+            prev.filter((m) => m.id !== real.id && m.status !== "sending");
+          return [...without, real];
         },
       );
     } catch (err) {
@@ -250,6 +260,11 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Enter" && !event.shiftKey && !composing) {
       event.preventDefault();
+      // Phase 6 §1: don't submit while WS is still connecting.
+      if (!wsReady) {
+        toast.info("Connecting to the server — try again in a moment.");
+        return;
+      }
       const form = event.currentTarget.form;
       if (form) {
         form.requestSubmit();
@@ -258,7 +273,7 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
   }
 
   const empty = value.trim().length === 0;
-  const disabled = !conversationId || empty || !currentUser;
+  const disabled = !conversationId || empty || !currentUser || !wsReady;
   const sendAria = `Send${disabled ? " (disabled)" : ""}`;
 
   function placeholderFeature(name: string) {
@@ -269,7 +284,10 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
     <form
       onSubmit={handleSubmit}
       className="flex items-end gap-2 border-t px-3 py-3"
-      style={{ borderColor: "var(--color-border-subtle)" }}
+      style={{
+        borderColor: "var(--color-border-subtle)",
+        opacity: wsReady ? 1 : 0.75,
+      }}
     >
       <button
         type="button"
@@ -295,7 +313,13 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
         ref={taRef}
         value={value}
         rows={1}
-        placeholder={conversationId ? "Message" : "Select a conversation"}
+        placeholder={
+          !wsReady
+            ? "Connecting to the server…"
+            : conversationId
+              ? "Message"
+              : "Select a conversation"
+        }
         onChange={(e) => handleChange(e.target.value)}
         onKeyDown={onKeyDown}
         onCompositionStart={() => setComposing(true)}
@@ -312,13 +336,22 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
         type="submit"
         disabled={disabled}
         aria-label={sendAria}
+        title={!wsReady ? "Connecting…" : "Send"}
         className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition disabled:cursor-not-allowed disabled:opacity-50"
         style={{
           backgroundColor: "var(--color-accent)",
           color: "var(--color-accent-fg)",
         }}
       >
-        <Send size={16} />
+        {wsReady ? (
+          <Send size={16} />
+        ) : (
+          <Loader2
+            size={16}
+            className="animate-spin"
+            aria-label="Connecting to server"
+          />
+        )}
       </button>
     </form>
   );

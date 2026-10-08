@@ -1,15 +1,27 @@
 /**
  * Round avatar with an optional online dot.
  *
- * Phase 5 wiring: pass `online={isUserOnline(userId)}` to override the
- * `last_seen` heuristic. When `online` is provided as a boolean it
- * wins (so a recently active user whose WS just disconnected gets the
- * offline dot back immediately).
+ * Two render branches:
+ *   - avatar URL is present and not yet known-broken  →  <img>
+ *   - otherwise                                      →  initials in a
+ *     placeholder disk (tertiary bg)
+ *
+ * We never render `<img src="">`, which triggers a Next.js warning
+ * and an unwanted page re-fetch in some browsers. The two branches
+ * alternate on a single piece of state (`imgBroken`) that flips to
+ * true on `onError`.
+ *
+ * Phase 5 wiring: pass `online={isUserOnline(userId)}` to override
+ * the `last_seen` heuristic. When `online` is provided as a boolean
+ * it wins (so a recently active user whose WS just disconnected gets
+ * the offline dot back immediately).
  */
+
+import { useState } from "react";
 
 interface AvatarProps {
   subject: {
-    avatar_url: string;
+    avatar_url: string | null;
     display_name: string;
     last_seen?: string | null;
   };
@@ -43,40 +55,41 @@ export function Avatar({
             Date.now() - new Date(subject.last_seen).getTime() < onlineThresholdMs,
         );
 
+  const [imgBroken, setImgBroken] = useState(false);
+  // If `avatar_url` is null/empty we never mount the img — this is the
+  // half that fixes the warning. `imgBroken` covers the failure
+  // (404/expired URL) case.
+  const showImg = Boolean(subject.avatar_url) && !imgBroken;
+
   return (
     <span
       className="relative inline-flex shrink-0"
       style={{ width: size, height: size }}
       aria-label={subject.display_name}
     >
-      {/* The avatar itself — image with initials fallback via
-          `onError`. Using an inline <img> keeps the component pure
-          client-side and avoids `next/image` config for Phase 3
-          (placeholder raster URLs aren't worth the optimization). */}
-      <img
-        src={subject.avatar_url}
-        alt=""
-        width={size}
-        height={size}
-        className="rounded-full bg-[var(--color-bg-tertiary)] object-cover"
-        style={{ width: size, height: size }}
-        onError={(e) => {
-          const target = e.currentTarget;
-          target.style.display = "none";
-          const fallback = target.nextElementSibling as HTMLElement | null;
-          if (fallback) fallback.style.display = "flex";
-        }}
-      />
-      <span
-        aria-hidden
-        className="absolute inset-0 hidden items-center justify-center rounded-full text-xs font-semibold text-[var(--color-fg-secondary)]"
-        style={{
-          backgroundColor: "var(--color-bg-tertiary)",
-          fontSize: size * 0.36,
-        }}
-      >
-        {initials}
-      </span>
+      {showImg ? (
+        <img
+          src={subject.avatar_url as string}
+          alt=""
+          width={size}
+          height={size}
+          className="rounded-full bg-[var(--color-bg-tertiary)] object-cover"
+          style={{ width: size, height: size }}
+          onError={() => setImgBroken(true)}
+        />
+      ) : (
+        <span
+          aria-hidden
+          className="absolute inset-0 flex items-center justify-center rounded-full font-semibold"
+          style={{
+            backgroundColor: "var(--color-bg-tertiary)",
+            color: "var(--color-fg-secondary)",
+            fontSize: size * 0.36,
+          }}
+        >
+          {initials}
+        </span>
+      )}
       {isOnline ? (
         <span
           aria-hidden

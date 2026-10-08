@@ -16,15 +16,27 @@
  * conversation is handled inside the modal.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { Pencil, Search, Settings2 } from "lucide-react";
+import {
+  LogOut,
+  Lock,
+  Pencil,
+  Search,
+  Settings2,
+  Sun,
+  User,
+  Users,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 import {
   ConversationListRow,
 } from "./conversation-list-row";
 import { EmptyState } from "./empty-state";
 import { AddContactModal } from "./add-contact-modal";
+import { NewGroupModal } from "./new-group-modal";
 import {
   ApiError,
   listConversations,
@@ -32,6 +44,8 @@ import {
   type Conversation,
 } from "@/lib/api";
 import { useUiStore } from "@/store/ui";
+import { useAuthStore } from "@/store/auth";
+import { performLogout } from "@/lib/auth-actions";
 import { MessageSquarePlus } from "lucide-react";
 
 const DEBOUNCE_MS = 150;
@@ -76,10 +90,21 @@ export function ConversationListPane() {
   }, [conversations, debouncedSearch]);
 
   const [modalOpen, setModalOpen] = useState(false);
+  const [groupModalOpen, setGroupModalOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [confirmLogout, setConfirmLogout] = useState(false);
+  const myUserId = useAuthStore((s) => s.user?.id ?? null);
+  const router = useRouter();
+
+  async function handleLogout() {
+    setConfirmLogout(false);
+    setSettingsOpen(false);
+    await performLogout(router);
+  }
 
   return (
     <aside
-      className="flex h-full w-[320px] shrink-0 flex-col border-r"
+      className="relative flex h-full w-[320px] shrink-0 flex-col border-r"
       style={{
         backgroundColor: "var(--color-bg-primary)",
         borderColor: "var(--color-border-subtle)",
@@ -95,12 +120,25 @@ export function ConversationListPane() {
         </h1>
         <div className="flex items-center gap-1">
           <IconButton
+            aria-label="New group"
+            title="New group"
+            onClick={() => setGroupModalOpen(true)}
+          >
+            <Users size={18} />
+          </IconButton>
+          <IconButton
             aria-label="New chat"
+            title="Compose"
             onClick={() => setModalOpen(true)}
           >
             <Pencil size={18} />
           </IconButton>
-          <IconButton aria-label="Settings">
+          <IconButton
+            aria-label="Settings"
+            aria-expanded={settingsOpen}
+            aria-haspopup="menu"
+            onClick={() => setSettingsOpen((v) => !v)}
+          >
             <Settings2 size={18} />
           </IconButton>
         </div>
@@ -161,6 +199,21 @@ export function ConversationListPane() {
         open={modalOpen}
         onClose={() => setModalOpen(false)}
       />
+      <NewGroupModal
+        open={groupModalOpen}
+        onClose={() => setGroupModalOpen(false)}
+        currentUserId={myUserId}
+      />
+      <SettingsMenu
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onRequestLogout={() => setConfirmLogout(true)}
+      />
+      <ConfirmLogoutModal
+        open={confirmLogout}
+        onCancel={() => setConfirmLogout(false)}
+        onConfirm={handleLogout}
+      />
     </aside>
   );
 }
@@ -192,6 +245,212 @@ function IconButton({
     >
       {children}
     </button>
+  );
+}
+
+/**
+ * Settings popover. Anchored to the top-right of the pane (the
+ * `Settings2` icon button). Items for Profile / Appearance / Privacy
+ * are placeholders — they toast a "Phase 7/8" hint; only Logout is
+ * wired in this task.
+ *
+ * Closes on:
+ *   - Clicking an action
+ *   - Clicking anywhere outside (Esc-key dismissal is a Phase 7 polish)
+ */
+function SettingsMenu({
+  open,
+  onClose,
+  onRequestLogout,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onRequestLogout: () => void;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  // Click-outside dismissal. Bound at mount, depends on `open` so
+  // it skips work while the menu is closed.
+  useEffect(() => {
+    if (!open) return;
+    function onPointer(e: MouseEvent) {
+      if (!ref.current) return;
+      if (ref.current.contains(e.target as Node)) return;
+      onClose();
+    }
+    document.addEventListener("mousedown", onPointer);
+    return () => document.removeEventListener("mousedown", onPointer);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  const items: Array<{
+    key: string;
+    label: string;
+    icon: React.ReactNode;
+    onClick: () => void;
+    danger?: boolean;
+    dividerAfter?: boolean;
+  }> = [
+    {
+      key: "profile",
+      label: "Profile",
+      icon: <User size={14} aria-hidden />,
+      onClick: () => {
+        onClose();
+        toast.info("Profile — Phase 7");
+      },
+    },
+    {
+      key: "appearance",
+      label: "Appearance",
+      icon: <Sun size={14} aria-hidden />,
+      onClick: () => {
+        onClose();
+        toast.info("Appearance — Phase 8 (dark mode)");
+      },
+    },
+    {
+      key: "privacy",
+      label: "Privacy",
+      icon: <Lock size={14} aria-hidden />,
+      onClick: () => {
+        onClose();
+        toast.info("Privacy — Phase 7");
+      },
+      dividerAfter: true,
+    },
+    {
+      key: "logout",
+      label: "Log out",
+      icon: <LogOut size={14} aria-hidden />,
+      onClick: () => onRequestLogout(),
+      danger: true,
+    },
+  ];
+
+  return (
+    <div
+      ref={ref}
+      role="menu"
+      aria-label="Settings"
+      className="absolute right-3 top-14 z-40 w-56 overflow-hidden rounded-lg border bg-[var(--color-bg-primary)] py-1 shadow-lg"
+      style={{ borderColor: "var(--color-border-subtle)" }}
+    >
+      {items.map((item) => (
+        <div key={item.key}>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={item.onClick}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition hover:bg-[var(--color-bg-tertiary)]"
+            style={{
+              color: item.danger
+                ? "var(--color-status-error)"
+                : "var(--color-fg-primary)",
+            }}
+          >
+            {item.icon}
+            <span>{item.label}</span>
+          </button>
+          {item.dividerAfter ? (
+            <div
+              className="mx-3 my-1 h-px"
+              style={{ backgroundColor: "var(--color-border-subtle)" }}
+              role="separator"
+            />
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Confirmation modal for logout. Two-step pattern — clicking "Log out"
+ * in the menu triggers this, only the explicit "Log out" button here
+ * runs the destructive cleanup. Esc-to-close.
+ */
+function ConfirmLogoutModal({
+  open,
+  onCancel,
+  onConfirm,
+}: {
+  open: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onCancel();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onCancel]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="confirm-logout-title"
+      className="fixed inset-0 z-50 flex items-center justify-center px-4"
+      style={{ backgroundColor: "rgba(0,0,0,0.35)" }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onCancel();
+      }}
+    >
+      <div
+        className="w-full max-w-[400px] overflow-hidden rounded-2xl border bg-[var(--color-bg-primary)] shadow-xl"
+        style={{ borderColor: "var(--color-border-subtle)" }}
+      >
+        <header
+          className="flex items-center justify-between border-b px-4 py-3"
+          style={{ borderColor: "var(--color-border-subtle)" }}
+        >
+          <h2 id="confirm-logout-title" className="text-base font-semibold text-[var(--color-fg-primary)]">
+            Log out?
+          </h2>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onCancel}
+            className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--color-fg-secondary)] hover:bg-[var(--color-bg-tertiary)]"
+          >
+            <X size={16} />
+          </button>
+        </header>
+        <div className="px-4 py-4 text-sm text-[var(--color-fg-secondary)]">
+          Your session will be cleared on this device. You can log back in
+          with the same phone number.
+        </div>
+        <footer
+          className="flex items-center justify-end gap-2 border-t px-4 py-3"
+          style={{ borderColor: "var(--color-border-subtle)" }}
+        >
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-lg px-3 py-1.5 text-sm font-medium text-[var(--color-fg-primary)] hover:bg-[var(--color-bg-tertiary)]"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="rounded-lg px-3 py-1.5 text-sm font-semibold"
+            style={{
+              backgroundColor: "var(--color-accent)",
+              color: "var(--color-accent-fg)",
+            }}
+          >
+            Log out
+          </button>
+        </footer>
+      </div>
+    </div>
   );
 }
 

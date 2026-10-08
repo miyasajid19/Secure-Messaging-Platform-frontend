@@ -24,7 +24,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "sonner";
 import { useAuthStore } from "@/store/auth";
-import { getOnlineUsers } from "@/lib/api";
+import { getOnlineUsers, setQueryClient } from "@/lib/api";
 import { useRealtimeStore } from "@/store/realtime";
 import { connect, disconnect } from "@/lib/realtime";
 
@@ -38,6 +38,16 @@ export function Providers({ children }: { children: ReactNode }) {
         },
       }),
   );
+
+  // Bind the singleton so WS handlers + composer use the SAME client
+  // instance that <QueryClientProvider> injects via React context.
+  // Without this, `setQueryData` in `lib/realtime.ts` writes to a
+  // different client than the one `useQuery` reads from — and real-
+  // time updates break silently. See DEBUG-FIX: Real-time message
+  // reception (task.md).
+  useEffect(() => {
+    setQueryClient(queryClient);
+  }, [queryClient]);
 
   // Hydrate auth from localStorage exactly once on mount. This runs in
   // the browser, so `window.localStorage` is always available here.
@@ -62,7 +72,11 @@ export function Providers({ children }: { children: ReactNode }) {
       .catch(() => {
         // Belt-and-suspenders only — the WS snapshot will catch up.
       });
-    // 2) Open the WS (idempotent).
+    // 2) Reset `wsReady` optimistically while we wait for the new
+    //    socket to register — the composer disables send during this
+    //    window (Phase 6 §1).
+    useRealtimeStore.getState().setWsReady(false);
+    // 3) Open the WS (idempotent).
     connect();
     return () => {
       cancelled = true;

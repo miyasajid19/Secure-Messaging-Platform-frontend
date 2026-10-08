@@ -20,8 +20,10 @@ import { toast } from "sonner";
 import { EmptyState } from "./empty-state";
 import { MessageSquareText } from "lucide-react";
 import { MessageBubble } from "./message-bubble";
+import { SystemMessage } from "./system-message";
 import { Composer } from "./composer";
 import { Avatar } from "./avatar";
+import { GroupInfoModal } from "./group-info-modal";
 import {
   getMe,
   listConversations,
@@ -172,6 +174,78 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
     }
   }
 
+  // Group info modal state. Always declared (BEFORE the early-return
+  // below) so React's Rules of Hooks are satisfied across the
+  // conversationId null ↔ defined transition. We don't conditionally
+  // open it; the modal itself ignores the conversation type at render.
+  const [groupInfoOpen, setGroupInfoOpen] = useState(false);
+
+  // No conversation selected (or conversations list still loading):
+  // render the empty state. Declared BEFORE any `conv.*` access so we
+  // don't reach for `.participants` on `undefined`.
+  if (!conversationId || !conversation) {
+    return (
+      <section
+        className="flex h-full flex-1 flex-col"
+        style={{ backgroundColor: "var(--color-bg-primary)" }}
+        aria-label="No conversation selected"
+      >
+        <EmptyState
+          icon={MessageSquareText}
+          title="Select a conversation to start chatting"
+          description="Pick someone from the list on the left to see your messages here."
+        />
+      </section>
+    );
+  }
+
+  // TS can't narrow `conversation` past the early-return above,
+  // so assert it's defined here. The early-return already handles the
+  // null case at runtime.
+  const conv = conversation as Conversation;
+  const cid = conversationId as number;
+
+  const headerSubject = headerSubjectFor(conv, myUserId);
+  // Typing indicator for both direct and group conversations. For
+  // groups we render multi-typer text per spec §5.
+  const typingRaw = typingByConversation[cid] ?? {};
+  const typingUserIds = Object.keys(typingRaw)
+    .map((s) => Number(s))
+    .filter((id) => id !== myUserId);
+  const typingNames = typingUserIds.map((id) =>
+    participantName(conv, id, myUserId),
+  );
+  const typingLabel = typingNames.length
+    ? typingNames.length === 1
+      ? `${typingNames[0]} is typing…`
+      : typingNames.length === 2
+        ? `${typingNames[0]} and ${typingNames[1]} are typing…`
+        : `${typingNames.length} people are typing…`
+    : null;
+
+  const otherParticipant =
+    conv.participants?.find((p) => p.id !== myUserId) ?? null;
+  const otherOnline = otherParticipant
+    ? Boolean(presenceByUser[otherParticipant.id])
+    : false;
+
+  const memberCount = countOthers(conv, myUserId);
+  const memberNames = (conv.participants ?? [])
+    .filter((p) => p.id !== myUserId)
+    .slice(0, 3)
+    .map((p) => p.display_name ?? p.phone ?? "?");
+
+  const displaySubtitle =
+    typingLabel != null
+      ? typingLabel
+      : conv.type === "group"
+        ? `${memberNames.join(", ")}${memberNames.length > 0 ? " · " : ""}${memberCount} members`
+        : otherOnline
+          ? "online"
+          : headerSubject.last_seen
+            ? relativeSeen(headerSubject.last_seen)
+            : "last seen recently";
+
   // No conversation selected: empty state.
   if (!conversationId || !conversation) {
     return (
@@ -189,49 +263,24 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
     );
   }
 
-  const headerSubject = headerSubjectFor(conversation, myUserId);
-  // Typing indicator: anyone (other than the current user) typing in
-  // this conversation. Phase 5 sees at most one name; Phase 6 will
-  // need the multi-typer case.
-  const typingUsers = (typingByConversation[conversationId] ?? {})
-    ? Object.keys(typingByConversation[conversationId] ?? {})
-        .map((s) => Number(s))
-        .filter((id) => id !== myUserId)
-    : [];
-  const typingName = typingUsers.length
-    ? participantName(conversation, typingUsers[0], myUserId)
-    : null;
-
-  // Detect "online" via the realtime presence store, falling back to
-  // the cached `last_seen` if the WS hasn't connected yet.
-  const otherParticipant = conversation.participants?.find((p) => p.id !== myUserId);
-  const otherOnline = otherParticipant
-    ? Boolean(presenceByUser[otherParticipant.id])
-    : false;
-
-  const displaySubtitle =
-    typingName != null
-      ? `${typingName} is typing…`
-      : conversation.type === "group"
-        ? `${countOthers(conversation, myUserId)} members`
-        : otherOnline
-          ? "online"
-          : headerSubject.last_seen
-            ? relativeSeen(headerSubject.last_seen)
-            : "last seen recently";
+  // REACHED HERE ONLY when conversationId AND conversation are both
+  // non-null. Render the chat shell.
 
   return (
     <section
       className="flex h-full flex-1 flex-col"
       style={{ backgroundColor: "var(--color-bg-primary)" }}
-      aria-label={`Chat with ${conversation.name ?? "conversation"}`}
+      aria-label={`Chat with ${conv.name ?? "conversation"}`}
     >
       <ChatHeader
         headerSubject={headerSubject}
-        title={conversation.name ?? "(unnamed)"}
+        title={conv.name ?? "(unnamed)"}
         subtitle={displaySubtitle}
         showBackButton={showBackButton}
         onBack={onBack}
+        onTitleClick={
+          conv.type === "group" ? () => setGroupInfoOpen(true) : undefined
+        }
       />
 
       <div className="flex-1 overflow-y-auto">
@@ -250,16 +299,20 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
           <ul className="flex flex-col gap-1 py-4">
             {allMessages.map((m) => (
               <li key={String(m.id)}>
-                <MessageBubble
-                  message={m}
-                  isOutgoing={myUserId !== null && m.sender_id === myUserId}
-                  showSenderHeader={
-                    conversation.type === "group" &&
-                    myUserId !== null &&
-                    m.sender_id !== myUserId
-                  }
-                  onRetry={retrySend}
-                />
+                {m.type === "system" ? (
+                  <SystemMessage message={m} />
+                ) : (
+                  <MessageBubble
+                    message={m}
+                    isOutgoing={myUserId !== null && m.sender_id === myUserId}
+                    showSenderHeader={
+                      conv.type === "group" &&
+                      myUserId !== null &&
+                      m.sender_id !== myUserId
+                    }
+                    onRetry={retrySend}
+                  />
+                )}
               </li>
             ))}
           </ul>
@@ -267,10 +320,19 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
       </div>
 
       <Composer
-        conversationId={conversationId}
+        conversationId={cid}
         currentUser={meQuery.data ?? null}
         onSend={handleSend}
       />
+
+      {conv.type === "group" ? (
+        <GroupInfoModal
+          open={groupInfoOpen}
+          onClose={() => setGroupInfoOpen(false)}
+          conversation={conv}
+          currentUserId={myUserId}
+        />
+      ) : null}
     </section>
   );
 }
@@ -324,6 +386,7 @@ interface ChatHeaderProps {
   subtitle: string;
   showBackButton: boolean;
   onBack?: () => void;
+  onTitleClick?: () => void;
 }
 
 function ChatHeader({
@@ -332,6 +395,7 @@ function ChatHeader({
   subtitle,
   showBackButton,
   onBack,
+  onTitleClick,
 }: ChatHeaderProps) {
   return (
     <header
@@ -352,14 +416,21 @@ function ChatHeader({
         </button>
       ) : null}
       <Avatar subject={headerSubject} size={40} />
-      <div className="flex min-w-0 flex-1 flex-col">
+      <button
+        type="button"
+        onClick={onTitleClick}
+        className={`flex min-w-0 flex-1 flex-col text-left ${
+          onTitleClick ? "cursor-pointer hover:underline" : "cursor-default"
+        }`}
+        aria-label={onTitleClick ? "Open group info" : undefined}
+      >
         <span className="truncate text-base font-semibold text-[var(--color-fg-primary)]">
           {title}
         </span>
         <span className="truncate text-xs text-[var(--color-fg-secondary)]">
           {subtitle}
         </span>
-      </div>
+      </button>
       <IconBtn aria-label="Search in conversation">
         <Search size={18} />
       </IconBtn>
