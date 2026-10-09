@@ -8,8 +8,8 @@
  * auth store, then routes to `/onboarding` if the user still needs to
  * pick a display name, or `/` otherwise.
  *
- * The "Use 123456" hint button autofills the mock OTP — it's a dev aid
- * gated behind a NODE_ENV check so production builds don't show it.
+ * The demo OTP hint is visible in production so visitors can complete
+ * the seeded-account sign-in without a real SMS provider.
  *
  * This component is rendered inside a `<Suspense>` boundary by the
  * parent `page.tsx` because it calls `useSearchParams`, which would
@@ -62,9 +62,6 @@ export function OtpForm() {
       setSubmitting(false);
     }
   }
-
-  const showMockHint =
-    typeof process !== "undefined" && process.env.NODE_ENV !== "production";
 
   return (
     <AuthCard
@@ -121,16 +118,14 @@ export function OtpForm() {
         <AuthButton type="submit" disabled={submitting || otp.length === 0}>
           {submitting ? "Verifying…" : "Verify"}
         </AuthButton>
-        {showMockHint ? (
-          <button
-            type="button"
-            onClick={() => setOtp(MOCK_OTP)}
-            className="text-xs text-[var(--color-fg-muted)] hover:text-[var(--color-fg-secondary)]"
-            disabled={submitting}
-          >
-            Use {MOCK_OTP} (dev)
-          </button>
-        ) : null}
+        <button
+          type="button"
+          onClick={() => setOtp(MOCK_OTP)}
+          className="text-xs text-[var(--color-fg-muted)] hover:text-[var(--color-fg-secondary)]"
+          disabled={submitting}
+        >
+          Use demo code {MOCK_OTP}
+        </button>
       </form>
     </AuthCard>
   );

@@ -1,391 +1,174 @@
 "use client";
 
-/**
- * Phase 9.5 — public landing page at `/`.
- *
- * The chat shell moved to `/chat` in this phase, so the root URL is now
- * a marketing-style page that describes the project and funnels users
- * into the demo. No auth is required to view this page. The floating
- * login widget (components/floating-login-widget.tsx) is mounted here
- * and stays accessible for unauthenticated visitors.
- *
- * Sections, top-to-bottom:
- *   1. Hero (title + tagline + CTAs + credit)
- *   2. Features grid (8 cards with lucide icons)
- *   3. Tech stack strip (chip badges)
- *   4. How it works (3 numbered steps)
- *   5. Footer (credit + social links)
- *
- * Tokens live in `app/tokens.css`. The page uses CSS variables only;
- * no raw color literals — that lets the existing dark-mode palette
- * (Phase 8.3) flip in for free when `<html data-theme="dark">` is set.
- */
+import { useEffect, useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
+import { ArrowRight, MessageCircle, Phone, ShieldCheck } from "lucide-react";
+import { toast } from "sonner";
+import { ApiError, requestOtp } from "@/lib/api";
+import { useAuthStore } from "@/store/auth";
 
-import Link from "next/link";
-import {
-  CheckCheck,
-  Eye,
-  Globe,
-  Mail,
-  MessageCircle,
-  Phone,
-  Reply,
-  Smile,
-  Timer,
-  UserCircle,
-  Users,
-} from "lucide-react";
-import { FloatingLoginWidget } from "@/components/floating-login-widget";
-
-const GITHUB_URL = "https://github.com/miyasajid19";
-const LINKEDIN_URL = "https://linkedin.com/in/sajidmiya";
-const EMAIL_URL = "mailto:me@sajidmiya.tech";
-
-const FEATURES = [
-  {
-    icon: Phone,
-    title: "Mocked OTP auth",
-    body: "Phone + 123456 → instant login, no real OTP needed.",
-  },
-  {
-    icon: MessageCircle,
-    title: "Real-time 1-on-1 chat",
-    body: "WebSocket-driven, sub-second delivery.",
-  },
-  {
-    icon: Users,
-    title: "Group messaging",
-    body: "Create groups, add/remove members, admin controls.",
-  },
-  {
-    icon: CheckCheck,
-    title: "Read receipts & typing",
-    body: "Single/double checks, real-time typing indicators.",
-  },
-  {
-    icon: Eye,
-    title: 'Per-message "seen by"',
-    body: "Messenger-style avatars showing who read each message.",
-  },
-  {
-    icon: Smile,
-    title: "Message reactions",
-    body: "Long-press to react with emoji, real-time updates.",
-  },
-  {
-    icon: Reply,
-    title: "Reply / quoted messages",
-    body: "Quote any message when replying.",
-  },
-  {
-    icon: Timer,
-    title: "Disappearing messages",
-    body: "Per-conversation auto-delete (1h / 24h / 1w).",
-  },
+const DEMO_ACCOUNTS = [
+  { name: "Alice Chen", phone: "+15550000001" },
+  { name: "Bob Martinez", phone: "+15550000002" },
+  { name: "Carol Singh", phone: "+15550000003" },
+  { name: "Dan O'Brien", phone: "+15550000004" },
+  { name: "Eve Tanaka", phone: "+15550000005" },
+  { name: "Maya Brooks", phone: "+15550000006" },
+  { name: "Noah Williams", phone: "+15550000007" },
 ] as const;
 
-const TECH_STRIP_FRONTEND = [
-  "Next.js 16",
-  "React 19",
-  "TypeScript",
-  "Tailwind v4",
-  "Zustand",
-  "TanStack Query",
-];
+export default function SignInPage() {
+  const router = useRouter();
+  const [phone, setPhone] = useState("");
+  const [selectedPhone, setSelectedPhone] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const token = useAuthStore((state) => state.token);
+  const user = useAuthStore((state) => state.user);
+  const hydrated = useAuthStore((state) => state.hydrated);
 
-const TECH_STRIP_BACKEND = [
-  "FastAPI",
-  "SQLAlchemy",
-  "SQLite (WAL)",
-  "PyJWT",
-  "WebSockets",
-];
+  useEffect(() => {
+    if (!hydrated || !token) return;
+    router.replace(user?.display_name && user.username ? "/chat" : "/onboarding");
+  }, [hydrated, token, user, router]);
 
-const TECH_STRIP_DEPLOY = ["Railway (backend)", "Vercel (frontend)"];
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const trimmed = phone.trim();
+    if (!trimmed) {
+      toast.error("Enter a phone number to continue");
+      return;
+    }
 
-const STEPS = [
-  {
-    title: "Sign in",
-    body: "Phone + any 6-digit code (123456 for the demo).",
-  },
-  {
-    title: "Pick a contact",
-    body: "Alice (seeded), or add a new one by phone.",
-  },
-  {
-    title: "Chat in real time",
-    body: "Open another tab as Bob, send a message, see it instantly.",
-  },
-] as const;
+    setSubmitting(true);
+    try {
+      await requestOtp(trimmed);
+      router.push(`/auth/otp?phone=${encodeURIComponent(trimmed)}`);
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : "Couldn't start sign-in");
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
-export default function LandingPage() {
   return (
-    <main
-      className="min-h-screen w-full"
-      style={{ backgroundColor: "var(--color-bg-primary)" }}
-    >
-      <Hero />
-      <Features />
-      <TechStrip />
-      <HowItWorks />
-      <Footer />
-      <FloatingLoginWidget />
-    </main>
-  );
-}
-
-function Hero() {
-  return (
-    <section
-      className="relative w-full"
-      style={{ background: "var(--color-hero-bg)" }}
-    >
-      <div className="mx-auto flex max-w-5xl flex-col items-center px-5 pb-16 pt-12 text-center sm:px-6 sm:pb-20 sm:pt-24 md:pt-32">
-        <span
-          className="mb-4 inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium"
-          style={{
-            backgroundColor: "var(--color-chip-bg)",
-            color: "var(--color-chip-fg)",
-          }}
-        >
-          <span
-            className="inline-block h-1.5 w-1.5 rounded-full"
-            style={{ backgroundColor: "var(--color-status-online)" }}
-            aria-hidden
-          />
-          Live demo · Real-time WebSockets
-        </span>
-        <h1 className="text-4xl font-semibold tracking-tight text-[var(--color-fg-primary)] sm:text-5xl md:text-6xl">
-          Signal Clone
-        </h1>
-        <p className="mt-5 max-w-2xl text-balance text-base leading-relaxed text-[var(--color-fg-secondary)] sm:text-lg">
-          A full-stack real-time messenger built as an assignment — Next.js,
-          FastAPI, WebSockets, SQLite.
-        </p>
-        <div className="mt-8 flex w-full flex-col items-stretch gap-3 sm:w-auto sm:flex-row sm:items-center">
-          <Link
-            href="/auth/phone"
-            className="inline-flex min-h-[44px] items-center justify-center rounded-lg px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:opacity-95 active:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-2"
-            style={{
-              backgroundColor: "var(--color-accent)",
-              boxShadow: "var(--color-card-shadow)",
-            }}
-          >
-            Try the demo
-          </Link>
-          <a
-            href={GITHUB_URL}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg border px-5 py-2.5 text-sm font-semibold transition hover:bg-[var(--color-bg-tertiary)] active:opacity-80"
-            style={{
-              borderColor: "var(--color-border-default)",
-              color: "var(--color-fg-primary)",
-            }}
-          >
-            <Globe size={16} aria-hidden />
-            View source on GitHub
-          </a>
-        </div>
-        <p className="mt-8 text-xs text-[var(--color-fg-muted)]">
-          Built by Sajid Miya
-        </p>
+    <main className="relative isolate flex min-h-screen items-center justify-center overflow-hidden bg-[var(--color-bg-secondary)] px-4 py-10 sm:px-6">
+      <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute -right-40 -top-44 h-[30rem] w-[30rem] rounded-full border border-[var(--color-border-subtle)] opacity-70" />
+        <div className="absolute -right-24 -top-28 h-[22rem] w-[22rem] rounded-full border border-[var(--color-border-default)] opacity-50" />
+        <div className="absolute -bottom-64 -left-40 h-[34rem] w-[34rem] rounded-full border border-[var(--color-border-subtle)] opacity-70" />
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,var(--color-bg-primary)_0%,transparent_68%)] opacity-55" />
       </div>
-    </section>
-  );
-}
 
-function Features() {
-  return (
-    <section className="w-full">
-      <div className="mx-auto max-w-6xl px-5 py-12 sm:px-6 md:py-20">
-        <header className="mb-8 flex flex-col items-center text-center sm:mb-10">
-          <h2 className="text-2xl font-semibold tracking-tight text-[var(--color-fg-primary)] sm:text-3xl md:text-4xl">
-            What's in the demo
-          </h2>
-          <p className="mt-3 max-w-xl text-sm text-[var(--color-fg-secondary)] sm:text-base">
-            Eight features wired end-to-end against the FastAPI backend.
+      <section
+        aria-labelledby="signin-title"
+        className="relative w-full max-w-[440px] rounded-[26px] border bg-[var(--color-bg-primary)] px-6 py-7 shadow-xl sm:px-9 sm:py-9"
+        style={{
+          borderColor: "var(--color-border-subtle)",
+          boxShadow: "var(--color-card-shadow)",
+        }}
+      >
+        <header className="mb-7 text-center">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-[17px] bg-[var(--color-accent)] text-white shadow-sm">
+            <MessageCircle size={23} strokeWidth={2.2} aria-hidden />
+          </div>
+          <p className="text-sm font-semibold text-[var(--color-fg-primary)]">Signal Clone</p>
+          <h1 id="signin-title" className="mt-2 text-[1.65rem] font-semibold tracking-tight text-[var(--color-fg-primary)]">
+            Sign in to your chats
+          </h1>
+          <p className="mx-auto mt-2 max-w-xs text-sm leading-6 text-[var(--color-fg-secondary)]">
+            Choose a seeded account or enter a phone number to continue.
           </p>
         </header>
-        <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-          {FEATURES.map(({ icon: Icon, title, body }) => (
-            <li
-              key={title}
-              className="group flex flex-col gap-2 rounded-2xl border bg-[var(--color-bg-primary)] p-4 sm:p-5 transition hover:-translate-y-0.5"
-              style={{
-                borderColor: "var(--color-card-border)",
-                boxShadow: "var(--color-card-shadow)",
+
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <label htmlFor="phone" className="text-sm font-medium text-[var(--color-fg-primary)]">
+            Phone number
+          </label>
+          <div className="relative -mt-2">
+            <Phone
+              className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--color-fg-muted)]"
+              size={17}
+              aria-hidden
+            />
+            <input
+              id="phone"
+              type="tel"
+              inputMode="tel"
+              autoComplete="tel"
+              autoFocus
+              required
+              value={phone}
+              onChange={(event) => {
+                setPhone(event.target.value);
+                setSelectedPhone(null);
               }}
-            >
-              <span
-                className="mb-1 inline-flex h-10 w-10 items-center justify-center rounded-xl"
-                style={{
-                  backgroundColor: "var(--color-chip-bg)",
-                  color: "var(--color-hero-accent)",
-                }}
-              >
-                <Icon size={20} aria-hidden />
-              </span>
-              <h3 className="text-sm font-semibold text-[var(--color-fg-primary)]">
-                {title}
-              </h3>
-              <p className="text-sm leading-relaxed text-[var(--color-fg-secondary)]">
-                {body}
-              </p>
-            </li>
-          ))}
-        </ul>
-      </div>
-    </section>
-  );
-}
-
-function TechStrip() {
-  return (
-    <section
-      className="w-full"
-      style={{ backgroundColor: "var(--color-section-alt)" }}
-    >
-      <div className="mx-auto max-w-6xl px-5 py-12 sm:px-6">
-        <h2 className="mb-6 text-center text-sm font-semibold uppercase tracking-wider text-[var(--color-fg-muted)]">
-          Tech stack
-        </h2>
-        <div className="flex flex-col items-center gap-4">
-          <ChipRow label="Frontend" items={TECH_STRIP_FRONTEND} />
-          <ChipRow label="Backend" items={TECH_STRIP_BACKEND} />
-          <ChipRow label="Deploy" items={TECH_STRIP_DEPLOY} />
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function ChipRow({ label, items }: { label: string; items: readonly string[] }) {
-  return (
-    <div className="flex w-full flex-col items-start gap-2 sm:flex-row sm:items-center sm:gap-3">
-      <span className="shrink-0 text-xs font-medium text-[var(--color-fg-muted)]">
-        {label}:
-      </span>
-      {/* On mobile, scroll the chips horizontally so a wide row doesn't
-          wrap awkwardly under the label. On sm+, let the chips wrap
-          naturally within the centered container. */}
-      <ul
-        className="flex w-full snap-x snap-mandatory gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:justify-center sm:overflow-visible sm:pb-0"
-        style={{ scrollbarWidth: "thin" }}
-      >
-        {items.map((item) => (
-          <li
-            key={item}
-            className="shrink-0 snap-start rounded-full px-3 py-1 text-xs font-medium sm:shrink"
-            style={{
-              backgroundColor: "var(--color-chip-bg)",
-              color: "var(--color-chip-fg)",
-            }}
+              placeholder="+1 555 000 0001"
+              disabled={submitting}
+              className="min-h-12 w-full rounded-xl border bg-[var(--color-bg-primary)] py-2 pl-10 pr-3 text-base text-[var(--color-fg-primary)] outline-none transition focus:border-[var(--color-accent)] focus:ring-4 focus:ring-blue-500/10 disabled:opacity-60"
+              style={{ borderColor: "var(--color-border-default)" }}
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={submitting || !phone.trim()}
+            className="mt-1 inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-[var(--color-accent)] px-4 py-3 text-sm font-semibold text-white transition hover:brightness-105 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/20 disabled:cursor-not-allowed disabled:opacity-55"
           >
-            {item}
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
+            {submitting ? "Continuing…" : "Continue"}
+            {!submitting ? <ArrowRight size={16} aria-hidden /> : null}
+          </button>
+        </form>
 
-function HowItWorks() {
-  return (
-    <section
-      className="w-full"
-      style={{ backgroundColor: "var(--color-section-alt)" }}
-    >
-      <div className="mx-auto max-w-5xl px-5 py-12 sm:px-6 md:py-20">
-        <header className="mb-8 flex flex-col items-center text-center sm:mb-10">
-          <h2 className="text-2xl font-semibold tracking-tight text-[var(--color-fg-primary)] sm:text-3xl md:text-4xl">
-            How it works
-          </h2>
-        </header>
-        <ol className="grid grid-cols-1 gap-4 sm:gap-5 md:grid-cols-3">
-          {STEPS.map((step, idx) => (
-            <li
-              key={step.title}
-              className="flex flex-col gap-3 rounded-2xl border bg-[var(--color-bg-primary)] p-5 sm:p-6"
-              style={{
-                borderColor: "var(--color-card-border)",
-                boxShadow: "var(--color-card-shadow)",
-              }}
-            >
-              <span
-                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-sm font-semibold text-white"
-                style={{ backgroundColor: "var(--color-hero-accent)" }}
-                aria-hidden
-              >
-                {idx + 1}
-              </span>
-              <h3 className="text-base font-semibold text-[var(--color-fg-primary)]">
-                {step.title}
-              </h3>
-              <p className="text-sm leading-relaxed text-[var(--color-fg-secondary)]">
-                {step.body}
-              </p>
-            </li>
-          ))}
-        </ol>
-      </div>
-    </section>
-  );
-}
+        <div className="my-6 flex items-center gap-3" aria-hidden>
+          <span className="h-px flex-1 bg-[var(--color-border-subtle)]" />
+          <span className="text-[11px] font-medium text-[var(--color-fg-muted)]">DEMO ACCOUNTS</span>
+          <span className="h-px flex-1 bg-[var(--color-border-subtle)]" />
+        </div>
 
-function Footer() {
-  return (
-    <footer
-      className="w-full border-t"
-      style={{
-        borderColor: "var(--color-divider-soft)",
-        backgroundColor: "var(--color-bg-primary)",
-      }}
-    >
-      <div className="mx-auto flex max-w-6xl flex-col items-center gap-4 px-5 py-10 text-center sm:px-6">
-        <p className="text-sm font-medium text-[var(--color-fg-primary)]">
-          Built by Sajid Miya · Full-stack demo
-        </p>
-        <ul className="flex items-center justify-center gap-3 sm:gap-4">
-          <li>
-            <a
-              href={GITHUB_URL}
-              target="_blank"
-              rel="noreferrer"
-              aria-label="GitHub"
-              className="flex h-11 w-11 items-center justify-center rounded-full transition hover:bg-[var(--color-bg-tertiary)] active:bg-[var(--color-bg-tertiary)]"
-              style={{ color: "var(--color-fg-secondary)" }}
-            >
-              <Globe size={20} aria-hidden />
-            </a>
-          </li>
-          <li>
-            <a
-              href={LINKEDIN_URL}
-              target="_blank"
-              rel="noreferrer"
-              aria-label="LinkedIn"
-              className="flex h-11 w-11 items-center justify-center rounded-full transition hover:bg-[var(--color-bg-tertiary)] active:bg-[var(--color-bg-tertiary)]"
-              style={{ color: "var(--color-fg-secondary)" }}
-            >
-              <UserCircle size={20} aria-hidden />
-            </a>
-          </li>
-          <li>
-            <a
-              href={EMAIL_URL}
-              aria-label="Email"
-              className="flex h-11 w-11 items-center justify-center rounded-full transition hover:bg-[var(--color-bg-tertiary)] active:bg-[var(--color-bg-tertiary)]"
-              style={{ color: "var(--color-fg-secondary)" }}
-            >
-              <Mail size={20} aria-hidden />
-            </a>
-          </li>
+        <ul className="grid grid-cols-2 gap-2" aria-label="Seeded demo accounts">
+          {DEMO_ACCOUNTS.map((account) => {
+            const selected = selectedPhone === account.phone;
+            return (
+              <li key={account.phone}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPhone(account.phone);
+                    setSelectedPhone(account.phone);
+                  }}
+                  disabled={submitting}
+                  aria-pressed={selected}
+                  className={`flex min-h-[58px] w-full flex-col items-start justify-center rounded-xl border px-3 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ${
+                    selected
+                      ? "border-[var(--color-accent)]"
+                      : "border-[var(--color-border-subtle)] hover:bg-[var(--color-bg-secondary)]"
+                  }`}
+                  style={
+                    selected
+                      ? {
+                          backgroundColor:
+                            "color-mix(in srgb, var(--color-accent) 9%, var(--color-bg-primary))",
+                        }
+                      : undefined
+                  }
+                >
+                  <span className="text-xs font-semibold text-[var(--color-fg-primary)]">{account.name}</span>
+                  <span className="mt-0.5 text-[11px] text-[var(--color-fg-muted)]">{account.phone}</span>
+                </button>
+              </li>
+            );
+          })}
         </ul>
-        <p className="text-xs text-[var(--color-fg-muted)]">
-          Powered by Next.js + FastAPI
+
+        <div className="mt-4 flex items-center justify-center gap-2 rounded-xl bg-[var(--color-bg-secondary)] px-3 py-2.5 text-xs text-[var(--color-fg-secondary)]">
+          <ShieldCheck size={15} className="shrink-0 text-[var(--color-accent)]" aria-hidden />
+          <span>Demo verification code</span>
+          <code className="rounded-md bg-[var(--color-bg-primary)] px-1.5 py-0.5 font-semibold tracking-[0.16em] text-[var(--color-fg-primary)]">123456</code>
+        </div>
+
+        <p className="mt-5 text-center text-[11px] leading-5 text-[var(--color-fg-muted)]">
+          No SMS is sent. This demo uses seeded conversations and a fixed code.
         </p>
-      </div>
-    </footer>
+      </section>
+    </main>
   );
 }

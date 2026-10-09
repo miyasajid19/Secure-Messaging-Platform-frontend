@@ -15,8 +15,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Signal Clone",
-  description: "A lightweight Signal-style messenger (demo).",
+  title: "Sign in · Signal Clone",
+  description: "Sign in to the Signal Clone messaging demo.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
