@@ -81,22 +81,25 @@ App boots on <http://localhost:3000> (auto-falls-back to 3001 if 3000 is busy). 
 
 ## Deployment (Vercel)
 
+The deploy artefacts live next to `package.json`:
+
+- `vercel.json` — declares the framework, the env vars Vercel should
+  prompt for at import time, and the build/dev/install commands.
+- `.env.example` — local dev defaults; the production values are set in
+  the Vercel project UI, NOT here.
+- `.gitignore` — already excludes `.next`, `.vercel`, `.env.local`, etc.
+
 ### One-time setup
 1. Import the GitHub repo into Vercel.
-2. Set the **Root Directory** to `frontend` (so Vercel finds `package.json` here, not at the repo root).
+2. Set the **Root Directory** to `frontend` (so Vercel finds `package.json`
+   and the in-tree `vercel.json`).
 3. Framework preset: Next.js (auto-detected).
-4. **Set the env vars** in the Vercel project settings BEFORE the first deploy — they are inlined at build time:
+4. When Vercel prompts for the env vars declared in `vercel.json`,
+   supply:
    - `NEXT_PUBLIC_API_URL` — e.g. `https://your-app.up.railway.app`
    - `NEXT_PUBLIC_WS_URL` — e.g. `wss://your-app.up.railway.app/ws`
-5. Deploy. Vercel picks up the `frontend/` subdirectory automatically when you set the root directory; otherwise add a `vercel.json` at the repo root pointing at it.
-
-```json
-{
-  "buildCommand": "npm run build",
-  "outputDirectory": ".next",
-  "framework": "nextjs"
-}
-```
+5. Deploy. `next.config.ts` keeps the experimental `cacheComponents` and
+   `partialPrefetching` flags that the Vercel runtime supports.
 
 ### Verify a live deploy
 1. Open the deployed URL → landing page renders with the floating widget.
