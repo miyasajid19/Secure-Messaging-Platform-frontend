@@ -474,6 +474,10 @@ export const removeMember = (conversationId: number, userId: number) =>
     { method: "DELETE" },
   );
 
+/** `POST /conversations/{id}/leave` — current member leaves the group. */
+export const leaveGroup = (conversationId: number) =>
+  apiFetch<void>(`/conversations/${conversationId}/leave`, { method: "POST" });
+
 /** `PATCH /conversations/{id}/members/{uid}` — admin only; change role. */
 export const promoteMember = (
   conversationId: number,

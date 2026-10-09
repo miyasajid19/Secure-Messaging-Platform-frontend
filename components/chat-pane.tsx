@@ -48,6 +48,7 @@ import {
   ApiError,
   listConversations,
   listMessages,
+  leaveGroup,
   markRead,
   queryKeys,
   sendMessage,
@@ -83,8 +84,30 @@ async function retryTransient<T>(request: () => Promise<T>): Promise<T> {
   }
 }
 
+function outgoingReadersForMessage(
+  message: Message,
+  conversation: Conversation,
+): Conversation["participants"] {
+  // A read receipt belongs to a recipient, never the message's sender.
+  const readers = (message.seen_by ?? []).filter(
+    (reader) => reader.id !== message.sender_id,
+  );
+  if (readers.length > 0 || message.status !== "read" || conversation.type !== "direct") {
+    return readers;
+  }
+
+  // The status endpoint is authoritative for direct chats. If an older
+  // backend response has a missing/incorrect seen_by list, the other
+  // participant is the only possible reader.
+  const recipient = conversation.participants.find(
+    (participant) => participant.id !== message.sender_id,
+  );
+  return recipient ? [recipient] : readers;
+}
+
 export function ChatPane({ showBackButton = false, onBack }: Props) {
   const conversationId = useUiStore((s) => s.selectedConversationId);
+  const setSelectedConversation = useUiStore((s) => s.setSelected);
   const storedUser = useAuthStore((s) => s.user);
   const typingByConversation = useRealtimeStore((s) => s.typingByConversation);
   const presenceByUser = useRealtimeStore((s) => s.presenceByUser);
@@ -222,13 +245,16 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
     if (myUserId == null) return lastSeen;
     for (const message of allMessages) {
       if (message.sender_id !== myUserId) continue;
-      for (const reader of message.seen_by ?? []) {
+      const readers = conversation
+        ? outgoingReadersForMessage(message, conversation)
+        : (message.seen_by ?? []).filter((reader) => reader.id !== message.sender_id);
+      for (const reader of readers) {
         const previous = lastSeen.get(reader.id) ?? 0;
         if (message.id > previous) lastSeen.set(reader.id, message.id);
       }
     }
     return lastSeen;
-  }, [allMessages, conversation?.type, myUserId]);
+  }, [allMessages, conversation, myUserId]);
 
   // The composer no longer routes optimistic messages through
   // `onSend`; it writes directly to the React Query cache. The
@@ -493,9 +519,23 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
   // REACHED HERE ONLY when conversationId AND conversation are both
   // non-null. Render the chat shell.
 
+  async function handleLeaveGroup() {
+    setChatMenuOpen(false);
+    if (!window.confirm(`Leave “${conv.name ?? "this group"}”?`)) return;
+    try {
+      await leaveGroup(conv.id);
+      toast.success("Left group");
+      setSelectedConversation(null);
+      await getQueryClient().invalidateQueries({ queryKey: queryKeys.conversations });
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : "Couldn't leave group");
+      await getQueryClient().invalidateQueries({ queryKey: queryKeys.conversations });
+    }
+  }
+
   return (
     <section
-      className="flex h-full flex-1 flex-col"
+      className="flex h-full min-w-0 flex-1 flex-col overflow-hidden"
       style={{ backgroundColor: "var(--color-bg-primary)" }}
       aria-label={`Chat with ${conversationTitle(conv, myUserId)}`}
     >
@@ -511,11 +551,12 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
         onMenuToggle={() => setChatMenuOpen((open) => !open)}
         onMenuClose={() => setChatMenuOpen(false)}
         onGroupSettings={() => { setChatMenuOpen(false); setGroupInfoOpen(true); }}
+        onLeaveGroup={handleLeaveGroup}
       />
 
       <div
         ref={scrollRef}
-        className="relative flex-1 overflow-y-auto"
+        className="relative min-w-0 flex-1 overflow-x-hidden overflow-y-auto"
         aria-label="Messages"
       >
         {pendingNewCount > 0 ? (
@@ -563,7 +604,7 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
             No messages yet — say hi to start the conversation.
           </div>
         ) : (
-          <ul className="flex flex-col gap-1 py-4">
+          <ul className="flex min-w-0 flex-col gap-1 overflow-x-hidden py-4">
             {allMessages.map((m) => (
               <li key={String(m.id)}>
                 {m.type === "system" ? (
@@ -573,7 +614,7 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
                     message={m}
                     seenBy={
                       myUserId !== null && m.sender_id === myUserId
-                        ? (m.seen_by ?? []).filter(
+                        ? outgoingReadersForMessage(m, conv).filter(
                             (reader) => lastSeenMessageByUser.get(reader.id) === m.id,
                           )
                         : m.seen_by
@@ -683,6 +724,7 @@ interface ChatHeaderProps {
   onMenuToggle: () => void;
   onMenuClose: () => void;
   onGroupSettings: () => void;
+  onLeaveGroup: () => void;
 }
 
 function ChatHeader({
@@ -697,10 +739,11 @@ function ChatHeader({
   onMenuToggle,
   onMenuClose,
   onGroupSettings,
+  onLeaveGroup,
 }: ChatHeaderProps) {
   return (
     <header
-      className="flex items-center gap-3 border-b px-4 py-3"
+      className="flex min-w-0 items-center gap-2 border-b px-2 py-3 sm:gap-3 sm:px-4"
       style={{
         borderColor: "var(--color-border-subtle)",
         backgroundColor: "var(--color-bg-primary)",
@@ -766,13 +809,13 @@ function ChatHeader({
         >
           <MoreHorizontal size={19} />
         </IconBtn>
-        {menuOpen ? <ChatOptionsMenu isGroup={isGroup} onClose={onMenuClose} onGroupSettings={onGroupSettings} /> : null}
+        {menuOpen ? <ChatOptionsMenu isGroup={isGroup} onClose={onMenuClose} onGroupSettings={onGroupSettings} onLeaveGroup={onLeaveGroup} /> : null}
       </div>
     </header>
   );
 }
 
-function ChatOptionsMenu({ isGroup, onClose, onGroupSettings }: { isGroup: boolean; onClose: () => void; onGroupSettings: () => void }) {
+function ChatOptionsMenu({ isGroup, onClose, onGroupSettings, onLeaveGroup }: { isGroup: boolean; onClose: () => void; onGroupSettings: () => void; onLeaveGroup: () => void }) {
   const menuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -806,7 +849,7 @@ function ChatOptionsMenu({ isGroup, onClose, onGroupSettings }: { isGroup: boole
     { label: "Archive", icon: <Archive size={15} />, action: () => comingSoon("Archive") },
     { label: "Block", icon: <Ban size={15} />, action: () => comingSoon("Block") },
     { label: "Delete", icon: <Trash2 size={15} />, action: () => comingSoon("Delete") },
-    ...(isGroup ? [{ label: "Leave group", icon: <LogOut size={15} />, action: () => comingSoon("Leave group") }] : []),
+    ...(isGroup ? [{ label: "Leave group", icon: <LogOut size={15} />, action: onLeaveGroup }] : []),
   ];
 
   return (

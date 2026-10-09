@@ -12,11 +12,13 @@
  * mount and syncs the URL on tab change so back/forward works.
  */
 
-import { Suspense, useEffect, useState, type ChangeEvent, type FormEvent } from "react";
+import { Suspense, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { useTheme } from "@/lib/theme";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
   Bell,
   Camera,
   ChartNoAxesCombined,
@@ -137,9 +139,14 @@ function SettingsPageInner() {
   const searchParams = useSearchParams();
   const profile = useAuthStore((s) => s.user);
   const initial = searchParams.get("section");
+  const mobileSectionsRef = useRef<HTMLDivElement | null>(null);
   const [section, setSection] = useState<Section>(
     isSection(initial) ? initial : "account",
   );
+  const [sectionScrollEdges, setSectionScrollEdges] = useState({
+    left: false,
+    right: false,
+  });
 
   // Sync URL ?section= on tab change so the browser back button moves
   // through tabs in a sensible order.
@@ -153,21 +160,69 @@ function SettingsPageInner() {
     }
   }, [section, router, searchParams]);
 
+  useEffect(() => {
+    const tabs = mobileSectionsRef.current;
+    const activeTab = tabs?.querySelector<HTMLButtonElement>(
+      '[role="tab"][aria-selected="true"]',
+    );
+    if (!tabs || !activeTab) return;
+
+    const activeLeft = activeTab.offsetLeft - tabs.scrollLeft;
+    const activeRight = activeLeft + activeTab.offsetWidth;
+    if (activeLeft < 0) {
+      tabs.scrollTo({ left: activeTab.offsetLeft, behavior: "smooth" });
+    } else if (activeRight > tabs.clientWidth) {
+      tabs.scrollTo({
+        left: activeTab.offsetLeft + activeTab.offsetWidth - tabs.clientWidth,
+        behavior: "smooth",
+      });
+    }
+  }, [section]);
+
+  useEffect(() => {
+    const tabs = mobileSectionsRef.current;
+    if (!tabs) return;
+
+    const updateScrollEdges = () => {
+      const left = tabs.scrollLeft > 1;
+      const right = tabs.scrollLeft + tabs.clientWidth < tabs.scrollWidth - 1;
+      setSectionScrollEdges((current) => {
+        if (current.left === left && current.right === right) return current;
+        return {
+          left,
+          right,
+        };
+      });
+    };
+
+    const initialFrame = window.requestAnimationFrame(updateScrollEdges);
+    tabs.addEventListener("scroll", updateScrollEdges, { passive: true });
+    const observer = new ResizeObserver(updateScrollEdges);
+    observer.observe(tabs);
+    window.addEventListener("resize", updateScrollEdges);
+    return () => {
+      window.cancelAnimationFrame(initialFrame);
+      tabs.removeEventListener("scroll", updateScrollEdges);
+      window.removeEventListener("resize", updateScrollEdges);
+      observer.disconnect();
+    };
+  }, []);
+
   return (
     <main
-      className="mx-auto flex h-screen w-full max-w-[960px] flex-col"
+      className="mx-auto flex min-h-screen w-full max-w-[960px] flex-col md:h-screen md:min-h-0"
       style={{ backgroundColor: "var(--color-bg-primary)" }}
       aria-label="Settings"
     >
       <header
-        className="flex items-center gap-3 border-b px-6 py-3"
+        className="flex min-h-14 items-center gap-3 border-b px-3 py-2.5 sm:px-6"
         style={{ borderColor: "var(--color-border-subtle)" }}
       >
         <button
           type="button"
           aria-label="Back"
           onClick={() => router.back()}
-          className="flex h-9 w-9 items-center justify-center rounded-full text-[var(--color-fg-secondary)] hover:bg-[var(--color-bg-tertiary)]"
+          className="flex h-11 w-11 items-center justify-center rounded-full text-[var(--color-fg-secondary)] hover:bg-[var(--color-bg-tertiary)] active:bg-[var(--color-bg-tertiary)]"
         >
           <ArrowLeft size={18} />
         </button>
@@ -176,7 +231,7 @@ function SettingsPageInner() {
         </h1>
       </header>
 
-      <div className="flex flex-1 flex-col overflow-y-auto md:flex-row md:overflow-hidden">
+      <div className="flex flex-1 flex-col md:min-h-0 md:flex-row md:overflow-hidden">
         <nav
           className="w-full shrink-0 p-2 md:w-56 md:overflow-y-auto md:border-r"
           style={{ borderColor: "var(--color-border-subtle)" }}
@@ -190,11 +245,7 @@ function SettingsPageInner() {
             type="button"
             onClick={() => setSection("account")}
             aria-current={section === "account" ? "page" : undefined}
-            className="mb-3 flex w-full items-center gap-3 rounded-lg px-2.5 py-3 text-left transition hover:bg-[var(--color-bg-tertiary)] active:bg-[var(--color-bg-tertiary)]"
-            style={{
-              backgroundColor:
-                section === "account" ? "var(--color-bg-tertiary)" : "transparent",
-            }}
+            className="mb-2 flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-left transition hover:bg-[var(--color-bg-tertiary)] active:bg-[var(--color-bg-tertiary)] md:mb-3 md:py-3"
           >
             <Avatar
               subject={{
@@ -202,7 +253,7 @@ function SettingsPageInner() {
                 display_name: profile?.display_name || "Your profile",
                 last_seen: profile?.last_seen,
               }}
-              size={56}
+              size={48}
               showOnline={false}
             />
             <span className="min-w-0 flex-1">
@@ -215,10 +266,74 @@ function SettingsPageInner() {
             </span>
           </button>
           <div
-            className="mb-2 border-t"
+            className="mb-2 border-t md:mb-2"
             style={{ borderColor: "var(--color-border-subtle)" }}
           />
-          <ul className="flex flex-col gap-0.5">
+          <div className="mb-2 flex min-w-0 items-center gap-1 md:hidden">
+            {sectionScrollEdges.left ? (
+              <button
+                type="button"
+                aria-label="Scroll to previous settings sections"
+                title="Previous sections"
+                onClick={() =>
+                  mobileSectionsRef.current?.scrollBy({
+                    left: -(mobileSectionsRef.current.clientWidth * 0.75),
+                    behavior: "smooth",
+                  })
+                }
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-[var(--color-fg-secondary)] hover:bg-[var(--color-bg-tertiary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+              >
+                <ChevronLeft size={18} aria-hidden />
+              </button>
+            ) : null}
+            <div
+              ref={mobileSectionsRef}
+              role="tablist"
+              aria-label="Settings sections"
+              className="flex min-w-0 flex-1 snap-x snap-proximity gap-1.5 overflow-x-auto py-1 [scrollbar-width:none]"
+            >
+              {SECTIONS.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={section === item.key}
+                  onClick={() => setSection(item.key)}
+                  className="min-h-10 shrink-0 snap-start rounded-full border px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+                  style={{
+                    borderColor:
+                      section === item.key
+                        ? "var(--color-accent)"
+                        : "var(--color-border-subtle)",
+                    backgroundColor:
+                      section === item.key
+                        ? "var(--color-bg-tertiary)"
+                        : "transparent",
+                    color: "var(--color-fg-primary)",
+                  }}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+            {sectionScrollEdges.right ? (
+              <button
+                type="button"
+                aria-label="Scroll to more settings sections"
+                title="More sections"
+                onClick={() =>
+                  mobileSectionsRef.current?.scrollBy({
+                    left: mobileSectionsRef.current.clientWidth * 0.75,
+                    behavior: "smooth",
+                  })
+                }
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-[var(--color-fg-secondary)] hover:bg-[var(--color-bg-tertiary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+              >
+                <ChevronRight size={18} aria-hidden />
+              </button>
+            ) : null}
+          </div>
+          <ul className="hidden flex-col gap-0.5 md:flex">
             {SECTIONS.map((s) => (
               <li key={s.key}>
                 <button
@@ -245,7 +360,7 @@ function SettingsPageInner() {
         </nav>
 
         <section
-          className="flex-1 overflow-y-auto p-4 md:p-6"
+          className="flex-none p-4 md:min-h-0 md:flex-1 md:overflow-y-auto md:p-6"
           aria-label={`${SECTIONS.find((s) => s.key === section)?.label} settings`}
         >
           {section === "account" ? <AccountPanel /> : null}
@@ -385,44 +500,52 @@ function AccountPanel() {
   }
 
   return (
-    <form
-      onSubmit={onSubmit}
-      className="flex max-w-[480px] flex-col gap-4"
-      aria-label="Account"
-    >
-      <h2 className="text-base font-semibold text-[var(--color-fg-primary)]">
-        Account
-      </h2>
-      <div className="flex items-center gap-3">
-        <Avatar subject={{ avatar_url: photoPreview || me.avatar_url || "", display_name: me.display_name ?? me.username ?? me.phone }} size={64} showOnline={false} />
-        <label htmlFor="settings-profile-photo" className="inline-flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm text-[var(--color-fg-primary)] hover:bg-[var(--color-bg-tertiary)]" style={{ borderColor: "var(--color-border-subtle)" }}>
-          <Camera size={16} />{profilePhoto ? "Change photo" : "Update profile photo"}
-        </label>
-        <input id="settings-profile-photo" type="file" accept="image/*" className="sr-only" onChange={onPhotoSelected} />
-      </div>
-      <Field label="Display name">
-        <input
-          type="text"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          maxLength={128}
-          disabled={saving}
-          className="w-full rounded-lg border bg-[var(--color-bg-secondary)] px-3 py-2 text-sm text-[var(--color-fg-primary)] outline-none focus:ring-2 focus:ring-[var(--color-accent)] disabled:opacity-60"
-          style={{ borderColor: "var(--color-border-subtle)" }}
-          aria-label="Display name"
-        />
-      </Field>
-      <Field label="Username">
-        <input type="text" value={usernameDraft} onChange={(event) => setUsernameDraft(event.target.value)} maxLength={64} placeholder="Choose a username" disabled={saving} className="w-full rounded-lg border bg-[var(--color-bg-secondary)] px-3 py-2 text-sm text-[var(--color-fg-primary)] outline-none focus:ring-2 focus:ring-[var(--color-accent)] disabled:opacity-60" style={{ borderColor: "var(--color-border-subtle)" }} aria-label="Username" />
-        <p className="mt-1 text-xs text-[var(--color-fg-muted)]">People can find you by username.</p>
-      </Field>
-      <Field label="Phone">
+    <div className="flex max-w-2xl flex-col gap-6" aria-label="Account">
+      <form id="settings-profile-form" onSubmit={onSubmit} className="flex flex-col gap-4" aria-label="Profile details">
+        <h2 className="text-base font-semibold text-[var(--color-fg-primary)]">
+          Account
+        </h2>
+        <div className="flex items-center gap-4 rounded-xl border p-3 sm:p-4" style={{ borderColor: "var(--color-border-subtle)" }}>
+          <Avatar subject={{ avatar_url: photoPreview || me.avatar_url || "", display_name: me.display_name ?? me.username ?? me.phone }} size={64} showOnline={false} />
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-[var(--color-fg-primary)]">Profile photo</p>
+            <p className="mt-0.5 text-xs text-[var(--color-fg-muted)]">Choose an image up to 5 MB.</p>
+            <label htmlFor="settings-profile-photo" className="mt-2 inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-lg border px-3 text-sm text-[var(--color-fg-primary)] hover:bg-[var(--color-bg-tertiary)]" style={{ borderColor: "var(--color-border-subtle)" }}>
+              <Camera size={16} />{profilePhoto ? "Change photo" : "Update photo"}
+            </label>
+            <input id="settings-profile-photo" type="file" accept="image/*" className="sr-only" onChange={onPhotoSelected} />
+          </div>
+        </div>
+        <Field label="Display name">
+          <input
+            type="text"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            maxLength={128}
+            disabled={saving}
+            className="min-h-11 w-full rounded-lg border bg-[var(--color-bg-secondary)] px-3 text-sm text-[var(--color-fg-primary)] outline-none focus:ring-2 focus:ring-[var(--color-accent)] disabled:opacity-60"
+            style={{ borderColor: "var(--color-border-subtle)" }}
+            aria-label="Display name"
+          />
+        </Field>
+        <Field label="Username">
+          <input type="text" value={usernameDraft} onChange={(event) => setUsernameDraft(event.target.value)} maxLength={64} placeholder="Choose a username" disabled={saving} className="min-h-11 w-full rounded-lg border bg-[var(--color-bg-secondary)] px-3 text-sm text-[var(--color-fg-primary)] outline-none focus:ring-2 focus:ring-[var(--color-accent)] disabled:opacity-60" style={{ borderColor: "var(--color-border-subtle)" }} aria-label="Username" />
+          <p className="mt-1 text-xs text-[var(--color-fg-muted)]">People can find you by username.</p>
+        </Field>
+      </form>
+
+      <section className="flex flex-col gap-4 border-t pt-5" style={{ borderColor: "var(--color-border-subtle)" }} aria-labelledby="account-phone-heading">
+        <div>
+          <h3 id="account-phone-heading" className="text-sm font-semibold text-[var(--color-fg-primary)]">Phone number</h3>
+          <p className="mt-1 text-xs text-[var(--color-fg-muted)]">Changing your number requires a verification code.</p>
+        </div>
+        <Field label="Phone">
         <input
           type="tel"
           value={phoneDraft}
           onChange={(event) => { setPhoneDraft(event.target.value); setPhoneOtpRequested(false); }}
           disabled={phoneBusy}
-          className="w-full rounded-lg border bg-[var(--color-bg-secondary)] px-3 py-2 text-sm text-[var(--color-fg-primary)] outline-none"
+          className="min-h-11 w-full rounded-lg border bg-[var(--color-bg-secondary)] px-3 text-sm text-[var(--color-fg-primary)] outline-none focus:ring-2 focus:ring-[var(--color-accent)]"
           style={{ borderColor: "var(--color-border-subtle)" }}
           aria-label="Phone number"
         />
@@ -430,25 +553,27 @@ function AccountPanel() {
           phoneOtpRequested ? (
             <form onSubmit={verifyPhoneChange} className="mt-2 flex gap-2">
               <input inputMode="numeric" value={phoneOtp} onChange={(event) => setPhoneOtp(event.target.value)} placeholder="Verification code" className="min-w-0 flex-1 rounded-lg border bg-[var(--color-bg-secondary)] px-3 py-2 text-sm text-[var(--color-fg-primary)] outline-none" style={{ borderColor: "var(--color-border-subtle)" }} aria-label="Verification code" />
-              <button type="submit" disabled={phoneBusy || !phoneOtp.trim()} className="rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-50" style={{ backgroundColor: "var(--color-accent)", color: "var(--color-accent-fg)" }}>{phoneBusy ? "Verifying…" : "Verify"}</button>
+              <button type="submit" disabled={phoneBusy || !phoneOtp.trim()} className="min-h-11 rounded-lg px-3 text-sm font-semibold disabled:opacity-50" style={{ backgroundColor: "var(--color-accent)", color: "var(--color-accent-fg)" }}>{phoneBusy ? "Verifying…" : "Verify"}</button>
             </form>
-          ) : <button type="button" onClick={() => void requestPhoneCode()} disabled={phoneBusy} className="mt-2 rounded-lg border px-3 py-2 text-sm text-[var(--color-fg-primary)] disabled:opacity-50" style={{ borderColor: "var(--color-border-subtle)" }}>{phoneBusy ? "Requesting…" : "Verify new number"}</button>
+          ) : <button type="button" onClick={() => void requestPhoneCode()} disabled={phoneBusy} className="mt-2 min-h-11 rounded-lg border px-3 text-sm text-[var(--color-fg-primary)] disabled:opacity-50" style={{ borderColor: "var(--color-border-subtle)" }}>{phoneBusy ? "Requesting…" : "Verify new number"}</button>
         ) : null}
-      </Field>
+        </Field>
+      </section>
       <div>
         <button
           type="submit"
+          form="settings-profile-form"
           disabled={saving || draft.trim().length === 0}
-          className="rounded-lg px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50"
+          className="min-h-11 rounded-lg px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50"
           style={{
             backgroundColor: "var(--color-accent)",
             color: "var(--color-accent-fg)",
           }}
         >
-          {saving ? "Saving…" : "Save"}
+          {saving ? "Saving…" : "Save changes"}
         </button>
       </div>
-    </form>
+    </div>
   );
 }
 
@@ -655,11 +780,11 @@ function Field({
   children: React.ReactNode;
 }) {
   return (
-    <label className="flex flex-col gap-1">
+    <div className="flex flex-col gap-1">
       <span className="text-xs font-medium text-[var(--color-fg-secondary)]">
         {label}
       </span>
       {children}
-    </label>
+    </div>
   );
 }

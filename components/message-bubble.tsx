@@ -441,13 +441,24 @@ export function MessageBubble({
               );
             })}
           </div>
+          {isOutgoing ? (
+            <div className="-mt-0.5 flex min-h-4 items-center justify-end">
+              <ReceiptMark
+                status={message.status}
+                mutedFg={mutedFg}
+                isGroup={isGroup}
+                recipientOnline={recipientOnline}
+                onRetry={onRetry ? () => onRetry(message) : undefined}
+              />
+            </div>
+          ) : null}
         </div>
         <div
-          className={`flex items-center gap-1 px-1 ${
+          className={`flex min-h-4 items-center gap-1 px-1 text-[11px] ${
             isOutgoing ? "justify-end" : "justify-start"
           }`}
         >
-          <span className="text-[10px]" style={{ color: mutedFg }}>
+          <span className="text-[11px]" style={{ color: "var(--color-fg-muted)" }}>
             {time}
           </span>
           {remainingMs != null ? (
@@ -460,15 +471,6 @@ export function MessageBubble({
               <Timer size={10} aria-hidden />
               {formatRemaining(remainingMs)}
             </span>
-          ) : null}
-          {isOutgoing ? (
-            <ReceiptMark
-              status={message.status}
-              mutedFg={mutedFg}
-              isGroup={isGroup}
-              recipientOnline={recipientOnline}
-              onRetry={onRetry ? () => onRetry(message) : undefined}
-            />
           ) : null}
         </div>
         {showSeenBy ? <SeenByAvatars users={seenBy} /> : null}
@@ -657,7 +659,7 @@ function ReceiptMark({
   if (effective === "sending") {
     return (
       <Loader2
-        size={12}
+        size={14}
         className="animate-spin"
         style={{ color: mutedFg }}
         aria-label="sending"
@@ -667,14 +669,14 @@ function ReceiptMark({
   if (effective === "read") {
     return (
       <Circle
-        size={12}
+        size={15}
         strokeWidth={2}
         style={{ color: mutedFg }}
         aria-label="seen"
       />
     );
   }
-  if ((isGroup && effective === "delivered") || (!isGroup && recipientOnline)) {
+  if (effective === "delivered" || (!isGroup && recipientOnline)) {
     return (
       <CheckCheck
         size={14}

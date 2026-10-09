@@ -20,14 +20,14 @@
  * Spec: @task.md §2 ("Mount in app/providers.tsx").
  */
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "sonner";
 import { useAuthStore } from "@/store/auth";
-import { getOnlineUsers, setQueryClient, type Message, queryKeys } from "@/lib/api";
+import { getOnlineUsers, setQueryClient } from "@/lib/api";
 import { useRealtimeStore } from "@/store/realtime";
 import { useUiStore } from "@/store/ui";
-import { connect, disconnect } from "@/lib/realtime";
+import { connect, disconnect, subscribeToIncomingMessages } from "@/lib/realtime";
 import { useNotificationSound } from "@/lib/notification-sound";
 import { useTheme } from "@/lib/theme";
 
@@ -110,35 +110,24 @@ export function Providers({ children }: { children: ReactNode }) {
   // Global keyboard shortcuts (Phase 7 §3).
   useEffect(() => installKeyboardShortcuts(), []);
 
-  // Notification sound: subscribe to the React Query cache. Whenever
-  // a `['messages', id]` cache entry grows by exactly 1 and the id
-  // doesn't match the currently-selected conversation, play a chime.
-  // Phase 7 §5.
+  // Phase 7 §5 — play for unique incoming messages outside the open chat.
   // Phase 8.3 — read the persisted theme and apply it on mount.
   // The hook fires its own useEffect; we just need to call it.
   useTheme();
   const sound = useNotificationSound();
+  const playChimeRef = useRef(sound.playChime);
   useEffect(() => {
-    const cache = queryClient.getQueryCache();
-    const unsubscribe = cache.subscribe((event) => {
-      if (event.type !== "updated") return;
-      const key = event.query.queryKey;
-      if (key[0] !== "messages") return;
-      const convId = key[1] as number | null;
-      if (convId == null) return;
-      const next = queryClient.getQueryData<Message[]>(key) ?? [];
-      const prev = (event.query.state as { data?: Message[] }).data ?? [];
-      if (next.length <= prev.length) return; // ignore shrinks
-      const added = next[next.length - 1];
-      if (!added) return;
+    playChimeRef.current = sound.playChime;
+  }, [sound.playChime]);
+  useEffect(() => {
+    return subscribeToIncomingMessages((message) => {
       const myUserId = useAuthStore.getState().user?.id ?? null;
-      const isMine = myUserId != null && added.sender_id === myUserId;
+      if (myUserId == null || message.sender_id === myUserId) return;
       const activeId = useUiStore.getState().selectedConversationId;
-      if (isMine || activeId === convId) return;
-      sound.playChime();
+      if (activeId === message.conversation_id) return;
+      playChimeRef.current();
     });
-    return () => unsubscribe();
-  }, [queryClient, sound]);
+  }, []);
 
   // Hydrate auth from localStorage exactly once on mount. This runs in
   // the browser, so `window.localStorage` is always available here.
@@ -184,7 +173,7 @@ export function Providers({ children }: { children: ReactNode }) {
     <QueryClientProvider client={queryClient}>
       {children}
       <Toaster
-        position="bottom-right"
+        position="top-right"
         richColors
         closeButton
         toastOptions={{ duration: 4000 }}

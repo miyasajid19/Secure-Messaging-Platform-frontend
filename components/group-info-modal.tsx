@@ -42,6 +42,7 @@ import {
   ApiError,
   addMember,
   deleteGroup,
+  leaveGroup,
   promoteMember,
   queryKeys,
   removeMember,
@@ -227,6 +228,20 @@ export function GroupInfoModal({
     onError: (err) => {
       const msg = err instanceof ApiError ? err.message : "Couldn't promote";
       toast.error(msg);
+    },
+  });
+
+  const leaveMutation = useMutation({
+    mutationFn: () => leaveGroup(conversation.id),
+    onSuccess: () => {
+      toast.success("Left group");
+      refresh();
+      onClose();
+    },
+    onError: (err) => {
+      const msg = err instanceof ApiError ? err.message : "Couldn't leave group";
+      toast.error(msg);
+      refresh();
     },
   });
 
@@ -565,22 +580,12 @@ export function GroupInfoModal({
         >
           <button
             type="button"
-            disabled={isLastAdmin || removeMutation.isPending}
-            onClick={() => {
-              if (currentUserId == null) return;
-              // Re-use removeMember — the backend treats "leave" and
-              // "remove" symmetrically (the row disappears either way).
-              removeMutation.mutate(currentUserId, {
-                onSuccess: () => {
-                  toast.success("Left group");
-                  onClose();
-                },
-              });
-            }}
+            disabled={isLastAdmin || leaveMutation.isPending}
+            onClick={() => leaveMutation.mutate()}
             className="inline-flex items-center gap-1 rounded px-3 py-1.5 text-xs text-[var(--color-fg-primary)] hover:bg-[var(--color-bg-tertiary)] disabled:cursor-not-allowed disabled:opacity-50"
             title={isLastAdmin ? "Promote another admin first" : "Leave group"}
           >
-            <LogOut size={12} /> Leave
+            <LogOut size={12} /> {leaveMutation.isPending ? "Leaving…" : "Leave"}
           </button>
           {isAdmin ? (
             confirmDelete ? (

@@ -148,7 +148,7 @@ export default function ChatPage() {
 
   return (
     <div
-      className="flex h-screen w-screen overflow-hidden"
+      className="flex h-screen w-full min-w-0 overflow-hidden"
       style={{ backgroundColor: "var(--color-bg-primary)" }}
     >
       {/*

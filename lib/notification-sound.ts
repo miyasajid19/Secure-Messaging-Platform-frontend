@@ -75,10 +75,34 @@ export function useNotificationSound() {
     setEnabledState(next);
     if (typeof window === "undefined") return;
     window.localStorage.setItem(STORAGE_KEY, next ? "1" : "0");
+    // Enabling sound happens in a user gesture; resume the browser's
+    // suspended audio context now so later WebSocket events can play.
+    if (next) {
+      const ctx = getCtx();
+      if (ctx?.state === "suspended") void ctx.resume();
+    }
   };
 
+  // A persisted enabled setting may load before the browser has granted
+  // audio playback. Unlock it on the first user interaction with the app.
+  useEffect(() => {
+    if (!enabled || typeof window === "undefined") return;
+    const unlock = () => {
+      const ctx = getCtx();
+      if (ctx?.state === "suspended") void ctx.resume();
+    };
+    window.addEventListener("pointerdown", unlock, { once: true });
+    window.addEventListener("keydown", unlock, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
+  }, [enabled]);
+
   function playChime() {
-    if (!enabled) return;
+    // Read persisted state at playback time because settings and the
+    // provider each own a hook instance and React state isn't shared.
+    if (readPersisted() !== true) return;
     const ctx = getCtx();
     if (!ctx) return;
     // Lazy-resume — most browsers require a user gesture to start

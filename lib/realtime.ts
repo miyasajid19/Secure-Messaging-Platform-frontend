@@ -37,6 +37,18 @@ import { useAuthStore } from "@/store/auth";
 import { useRealtimeStore } from "@/store/realtime";
 import { useUiStore } from "@/store/ui";
 
+const incomingMessageListeners = new Set<(message: Message) => void>();
+
+/** Subscribe to de-duplicated messages received from the WebSocket. */
+export function subscribeToIncomingMessages(
+  listener: (message: Message) => void,
+): () => void {
+  incomingMessageListeners.add(listener);
+  return () => {
+    incomingMessageListeners.delete(listener);
+  };
+}
+
 // --- incoming wire types --------------------------------------------------
 
 interface IncomingMessage {
@@ -336,8 +348,11 @@ function handleMessageNew(msg: MessageNew) {
   const qc = getQueryClient();
   const m = normalizeIncoming(msg.message);
   if (!m) return;
+  const key = queryKeys.messages(m.conversation_id);
+  const cached = qc.getQueryData<Message[]>(key);
+  const isDuplicate = cached?.some((row) => row.id === m.id) ?? false;
   qc.setQueryData<Message[]>(
-    queryKeys.messages(m.conversation_id),
+    key,
     (prev) => {
       if (!prev) return [m];
       // Idempotent append: if the cache already has a row with this
@@ -350,6 +365,15 @@ function handleMessageNew(msg: MessageNew) {
       return [...prev, m];
     },
   );
+  if (!isDuplicate) {
+    for (const listener of incomingMessageListeners) {
+      try {
+        listener(m);
+      } catch (error) {
+        console.warn("Incoming message listener failed", error);
+      }
+    }
+  }
   void qc.invalidateQueries({ queryKey: queryKeys.conversations });
 }
 

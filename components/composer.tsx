@@ -363,7 +363,7 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
   return (
     <form
       onSubmit={handleSubmit}
-      className="flex flex-col gap-0 border-t"
+      className="flex min-w-0 max-w-full flex-col gap-0 overflow-hidden border-t"
       style={{
         borderColor: "var(--color-border-subtle)",
         opacity: wsReady ? 1 : 0.75,
@@ -410,7 +410,7 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
         </div>
       ) : null}
       <div
-        className="flex items-end gap-2 px-3 py-3"
+        className="flex min-w-0 w-full items-end gap-1 px-2 py-3 sm:gap-2 sm:px-3"
         style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
       >
       <input
@@ -458,7 +458,7 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
         onCompositionStart={() => setComposing(true)}
         onCompositionEnd={() => setComposing(false)}
         disabled={!conversationId || uploading}
-        className="min-h-9 flex-1 resize-none rounded-2xl border bg-[var(--color-bg-primary)] px-3 py-2 text-sm text-[var(--color-fg-primary)] outline-none focus:ring-2 focus:ring-[var(--color-accent)] disabled:opacity-60"
+        className="min-h-9 min-w-0 flex-1 resize-none rounded-2xl border bg-[var(--color-bg-primary)] px-3 py-2 text-sm text-[var(--color-fg-primary)] outline-none focus:ring-2 focus:ring-[var(--color-accent)] disabled:opacity-60"
         style={{
           borderColor: "var(--color-border-subtle)",
           lineHeight: `${LINE_PX}px`,

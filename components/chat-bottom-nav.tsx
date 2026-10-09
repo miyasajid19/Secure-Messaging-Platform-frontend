@@ -22,6 +22,7 @@
 
 import { useRouter, usePathname } from "next/navigation";
 import { BookOpen, MessageCircle, Phone, Settings as SettingsIcon } from "lucide-react";
+import { toast } from "sonner";
 
 const ICON_SIZE = 22;
 
@@ -80,15 +81,13 @@ export function ChatBottomNav() {
         label="Calls"
         Icon={Phone}
         active={false}
-        disabled
-        onClick={() => undefined}
+        onClick={() => toast.info("Calls are coming soon", { position: "top-right" })}
       />
       <Item
         label="Stories"
         Icon={BookOpen}
         active={false}
-        disabled
-        onClick={() => undefined}
+        onClick={() => toast.info("Stories are coming soon", { position: "top-right" })}
       />
       <Item
         label="Settings"

@@ -29,6 +29,7 @@ import {
   Menu,
   MessageSquarePlus,
   MoreHorizontal,
+  Moon,
   Plus,
   Search,
   Sun,
@@ -58,6 +59,7 @@ import { useUiStore } from "@/store/ui";
 import { useAuthStore } from "@/store/auth";
 import { performLogout } from "@/lib/auth-actions";
 import { SHORTCUT_SEARCH_EVENT } from "@/app/providers";
+import { useTheme } from "@/lib/theme";
 
 const DEBOUNCE_MS = 150;
 type ConversationFilter = "all" | "unread" | "groups" | "direct";
@@ -71,6 +73,7 @@ export function ConversationListPane({
 }) {
   const setSelected = useUiStore((s) => s.setSelected);
   const selectedId = useUiStore((s) => s.selectedConversationId);
+  const { theme, toggle: toggleTheme } = useTheme();
   const queryClient = useQueryClient();
 
   const conversationsQuery = useQuery({
@@ -213,6 +216,13 @@ export function ConversationListPane({
         )}
         {!showNewChat ? (
         <div className="flex items-center gap-1">
+          <IconButton
+            aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+            title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+            onClick={toggleTheme}
+          >
+            {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+          </IconButton>
           <IconButton
             aria-label="New chat"
             title="Compose"
