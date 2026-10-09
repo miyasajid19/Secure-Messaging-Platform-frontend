@@ -38,6 +38,22 @@
   --color-status-online: #25d366;
   --color-status-typing: #2c6bed;
   --color-status-error: #d83a3a;
+
+  /*
+   * Phase 9.5 — landing page tokens. Used by the public marketing page
+   * at `/` and the floating login widget. Kept separate from app-shell
+   * tokens so the chat UI stays untouched.
+   */
+  --color-hero-bg: linear-gradient(180deg, #f7f9ff 0%, #ffffff 100%);
+  --color-hero-accent: #2c6bed;
+  --color-section-alt: #f7f8fb;
+  --color-card-border: #ececf1;
+  --color-card-shadow: 0 1px 2px rgba(20, 22, 28, 0.04), 0 4px 16px rgba(20, 22, 28, 0.06);
+  --color-card-shadow-hover: 0 4px 8px rgba(20, 22, 28, 0.06), 0 12px 32px rgba(20, 22, 28, 0.10);
+  --color-widget-shadow: 0 12px 32px rgba(20, 22, 28, 0.18), 0 2px 6px rgba(20, 22, 28, 0.08);
+  --color-chip-bg: #f1f2f6;
+  --color-chip-fg: #2a2c2f;
+  --color-divider-soft: #e9eaee;
 }
 
 /*
@@ -64,4 +80,16 @@
   --color-status-online: #3ab27f;
   --color-status-typing: #5b9dff;
   --color-status-error: #ff5b5b;
+
+  /* Phase 9.5 — landing page tokens (dark variant). */
+  --color-hero-bg: linear-gradient(180deg, #1f2126 0%, #1b1c1f 100%);
+  --color-hero-accent: #5b9dff;
+  --color-section-alt: #232529;
+  --color-card-border: #2f3134;
+  --color-card-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 4px 16px rgba(0, 0, 0, 0.45);
+  --color-card-shadow-hover: 0 4px 8px rgba(0, 0, 0, 0.45), 0 12px 32px rgba(0, 0, 0, 0.55);
+  --color-widget-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.35);
+  --color-chip-bg: #2f3134;
+  --color-chip-fg: #e9e9e9;
+  --color-divider-soft: #2a2c2f;
 }

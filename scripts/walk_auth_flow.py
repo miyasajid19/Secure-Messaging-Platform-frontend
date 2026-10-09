@@ -64,7 +64,7 @@ with sync_playwright() as p:
     name_input = page.locator('input[aria-label="Display name"]')
     name_input.fill("Test User")
     page.get_by_role("button", name="Continue").click()
-    page.wait_for_url(BASE + "/", timeout=10000)
+    page.wait_for_url(BASE + "/chat", timeout=10000)
     # Wait for /auth/me to resolve and the greeting label to settle.
     page.wait_for_selector("text=Logged in as Test User", timeout=10000)
     body_text = page.locator("body").text_content() or ""

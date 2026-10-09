@@ -22,7 +22,7 @@ def login(page, phone):
     page.wait_for_url("**/auth/otp*", timeout=10000)
     page.get_by_role("button", name=re.compile(r"Use 123456")).click()
     page.get_by_role("button", name="Verify").click()
-    page.wait_for_url(BASE + "/", timeout=15000)
+    page.wait_for_url(BASE + "/chat", timeout=15000)
 
 
 with sync_playwright() as p:

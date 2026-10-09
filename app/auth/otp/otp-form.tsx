@@ -51,7 +51,9 @@ export function OtpForm() {
     try {
       const { token, user } = await verifyOtp(phone, trimmed);
       setAuth(token, user);
-      router.push(user.display_name && user.username ? "/" : "/onboarding");
+      // Phase 9.5 — chat shell moved to /chat. Push new users to
+      // onboarding, existing users directly into the chat.
+      router.push(user.display_name && user.username ? "/chat" : "/onboarding");
     } catch (error) {
       const message = error instanceof ApiError ? error.message : "Invalid code";
       toast.error(message);

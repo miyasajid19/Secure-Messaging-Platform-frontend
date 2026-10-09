@@ -40,7 +40,7 @@ def login(page):
     page.wait_for_url("**/auth/otp*", timeout=10000)
     page.get_by_role("button", name=re.compile(r"Use 123456")).click()
     page.get_by_role("button", name="Verify").click()
-    page.wait_for_url(BASE + "/", timeout=15000)
+    page.wait_for_url(BASE + "/chat", timeout=15000)
 
 
 with sync_playwright() as p:
@@ -99,7 +99,7 @@ with sync_playwright() as p:
     p2.wait_for_url("**/auth/otp*", timeout=10000)
     p2.get_by_role("button", name=re.compile(r"Use 123456")).click()
     p2.get_by_role("button", name="Verify").click()
-    p2.wait_for_url(BASE + "/", timeout=15000)
+    p2.wait_for_url(BASE + "/chat", timeout=15000)
     # On mobile, only one of {list, chat} should be visible. Check
     # that the chat pane is NOT visible (since no conversation was selected).
     list_visible = p2.locator('aside[aria-label="Conversations"]').is_visible()

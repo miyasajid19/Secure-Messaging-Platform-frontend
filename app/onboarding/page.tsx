@@ -84,7 +84,8 @@ export default function OnboardingPage() {
       // Preserve existing token; just refresh the user object.
       const currentToken = useAuthStore.getState().token;
       if (currentToken) setAuth(currentToken, updated);
-      router.push("/");
+      // Phase 9.5 — chat shell moved to /chat.
+      router.push("/chat");
     } catch (error) {
       const message =
         error instanceof ApiError ? error.message : "Failed to save profile";
