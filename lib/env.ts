@@ -29,6 +29,6 @@ function readOrDefault(name: string, fallback: string): string {
 }
 
 export const env: PublicEnv = {
-  apiUrl: readOrDefault("NEXT_PUBLIC_API_URL", "https://secure-messaging-platform-backend.onrender.com/"),
+  apiUrl: readOrDefault("NEXT_PUBLIC_API_URL", "https://secure-messaging-platform-backend.onrender.com"),
   wsUrl: readOrDefault("NEXT_PUBLIC_WS_URL", "wss://secure-messaging-platform-backend.onrender.com/ws"),
 };
