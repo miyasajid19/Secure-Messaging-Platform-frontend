@@ -199,14 +199,14 @@ export function NewGroupModal({ open, onClose, currentUserId }: Props) {
       role="dialog"
       aria-modal="true"
       aria-label="New group"
-      className="fixed inset-0 z-50 flex items-center justify-center px-4"
+      className="fixed inset-0 z-50 flex items-stretch justify-center sm:items-center sm:px-4 sm:py-6"
       style={{ backgroundColor: "rgba(0,0,0,0.35)" }}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
       <div
-        className="w-full max-w-[420px] overflow-hidden rounded-2xl border bg-[var(--color-bg-primary)] shadow-xl"
+        className="flex w-full max-w-[480px] flex-col overflow-hidden border bg-[var(--color-bg-primary)] shadow-xl sm:rounded-2xl"
         style={{ borderColor: "var(--color-border-subtle)" }}
       >
         <header
@@ -220,9 +220,9 @@ export function NewGroupModal({ open, onClose, currentUserId }: Props) {
             type="button"
             aria-label="Close"
             onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--color-fg-secondary)] hover:bg-[var(--color-bg-tertiary)]"
+            className="flex h-11 w-11 items-center justify-center rounded-full text-[var(--color-fg-secondary)] hover:bg-[var(--color-bg-tertiary)] active:bg-[var(--color-bg-tertiary)]"
           >
-            <X size={16} />
+            <X size={18} />
           </button>
         </header>
 

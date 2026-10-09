@@ -140,7 +140,7 @@ function Hero() {
       className="relative w-full"
       style={{ background: "var(--color-hero-bg)" }}
     >
-      <div className="mx-auto flex max-w-5xl flex-col items-center px-6 pb-20 pt-24 text-center sm:pt-32">
+      <div className="mx-auto flex max-w-5xl flex-col items-center px-5 pb-16 pt-12 text-center sm:px-6 sm:pb-20 sm:pt-24 md:pt-32">
         <span
           className="mb-4 inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium"
           style={{
@@ -155,17 +155,17 @@ function Hero() {
           />
           Live demo · Real-time WebSockets
         </span>
-        <h1 className="text-5xl font-semibold tracking-tight text-[var(--color-fg-primary)] sm:text-6xl">
+        <h1 className="text-4xl font-semibold tracking-tight text-[var(--color-fg-primary)] sm:text-5xl md:text-6xl">
           Signal Clone
         </h1>
-        <p className="mt-5 max-w-2xl text-balance text-lg leading-relaxed text-[var(--color-fg-secondary)]">
+        <p className="mt-5 max-w-2xl text-balance text-base leading-relaxed text-[var(--color-fg-secondary)] sm:text-lg">
           A full-stack real-time messenger built as an assignment — Next.js,
           FastAPI, WebSockets, SQLite.
         </p>
-        <div className="mt-8 flex flex-col items-center gap-3 sm:flex-row">
+        <div className="mt-8 flex w-full flex-col items-stretch gap-3 sm:w-auto sm:flex-row sm:items-center">
           <Link
             href="/auth/phone"
-            className="inline-flex items-center justify-center rounded-lg px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:opacity-95 focus:outline-none focus:ring-2 focus:ring-offset-2"
+            className="inline-flex min-h-[44px] items-center justify-center rounded-lg px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:opacity-95 active:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-2"
             style={{
               backgroundColor: "var(--color-accent)",
               boxShadow: "var(--color-card-shadow)",
@@ -177,7 +177,7 @@ function Hero() {
             href={GITHUB_URL}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center justify-center gap-2 rounded-lg border px-5 py-2.5 text-sm font-semibold transition hover:bg-[var(--color-bg-tertiary)]"
+            className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg border px-5 py-2.5 text-sm font-semibold transition hover:bg-[var(--color-bg-tertiary)] active:opacity-80"
             style={{
               borderColor: "var(--color-border-default)",
               color: "var(--color-fg-primary)",
@@ -198,20 +198,20 @@ function Hero() {
 function Features() {
   return (
     <section className="w-full">
-      <div className="mx-auto max-w-6xl px-6 py-20">
-        <header className="mb-10 flex flex-col items-center text-center">
-          <h2 className="text-3xl font-semibold tracking-tight text-[var(--color-fg-primary)] sm:text-4xl">
+      <div className="mx-auto max-w-6xl px-5 py-12 sm:px-6 md:py-20">
+        <header className="mb-8 flex flex-col items-center text-center sm:mb-10">
+          <h2 className="text-2xl font-semibold tracking-tight text-[var(--color-fg-primary)] sm:text-3xl md:text-4xl">
             What's in the demo
           </h2>
-          <p className="mt-3 max-w-xl text-[var(--color-fg-secondary)]">
+          <p className="mt-3 max-w-xl text-sm text-[var(--color-fg-secondary)] sm:text-base">
             Eight features wired end-to-end against the FastAPI backend.
           </p>
         </header>
-        <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
           {FEATURES.map(({ icon: Icon, title, body }) => (
             <li
               key={title}
-              className="group flex flex-col gap-2 rounded-2xl border bg-[var(--color-bg-primary)] p-5 transition hover:-translate-y-0.5"
+              className="group flex flex-col gap-2 rounded-2xl border bg-[var(--color-bg-primary)] p-4 sm:p-5 transition hover:-translate-y-0.5"
               style={{
                 borderColor: "var(--color-card-border)",
                 boxShadow: "var(--color-card-shadow)",
@@ -246,7 +246,7 @@ function TechStrip() {
       className="w-full"
       style={{ backgroundColor: "var(--color-section-alt)" }}
     >
-      <div className="mx-auto max-w-6xl px-6 py-12">
+      <div className="mx-auto max-w-6xl px-5 py-12 sm:px-6">
         <h2 className="mb-6 text-center text-sm font-semibold uppercase tracking-wider text-[var(--color-fg-muted)]">
           Tech stack
         </h2>
@@ -262,15 +262,21 @@ function TechStrip() {
 
 function ChipRow({ label, items }: { label: string; items: readonly string[] }) {
   return (
-    <div className="flex flex-col items-center gap-2 sm:flex-row sm:gap-3">
-      <span className="text-xs font-medium text-[var(--color-fg-muted)]">
+    <div className="flex w-full flex-col items-start gap-2 sm:flex-row sm:items-center sm:gap-3">
+      <span className="shrink-0 text-xs font-medium text-[var(--color-fg-muted)]">
         {label}:
       </span>
-      <ul className="flex flex-wrap justify-center gap-2">
+      {/* On mobile, scroll the chips horizontally so a wide row doesn't
+          wrap awkwardly under the label. On sm+, let the chips wrap
+          naturally within the centered container. */}
+      <ul
+        className="flex w-full snap-x snap-mandatory gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:justify-center sm:overflow-visible sm:pb-0"
+        style={{ scrollbarWidth: "thin" }}
+      >
         {items.map((item) => (
           <li
             key={item}
-            className="rounded-full px-3 py-1 text-xs font-medium"
+            className="shrink-0 snap-start rounded-full px-3 py-1 text-xs font-medium sm:shrink"
             style={{
               backgroundColor: "var(--color-chip-bg)",
               color: "var(--color-chip-fg)",
@@ -290,17 +296,17 @@ function HowItWorks() {
       className="w-full"
       style={{ backgroundColor: "var(--color-section-alt)" }}
     >
-      <div className="mx-auto max-w-5xl px-6 py-20">
-        <header className="mb-10 flex flex-col items-center text-center">
-          <h2 className="text-3xl font-semibold tracking-tight text-[var(--color-fg-primary)] sm:text-4xl">
+      <div className="mx-auto max-w-5xl px-5 py-12 sm:px-6 md:py-20">
+        <header className="mb-8 flex flex-col items-center text-center sm:mb-10">
+          <h2 className="text-2xl font-semibold tracking-tight text-[var(--color-fg-primary)] sm:text-3xl md:text-4xl">
             How it works
           </h2>
         </header>
-        <ol className="grid grid-cols-1 gap-5 md:grid-cols-3">
+        <ol className="grid grid-cols-1 gap-4 sm:gap-5 md:grid-cols-3">
           {STEPS.map((step, idx) => (
             <li
               key={step.title}
-              className="flex flex-col gap-3 rounded-2xl border bg-[var(--color-bg-primary)] p-6"
+              className="flex flex-col gap-3 rounded-2xl border bg-[var(--color-bg-primary)] p-5 sm:p-6"
               style={{
                 borderColor: "var(--color-card-border)",
                 boxShadow: "var(--color-card-shadow)",
@@ -336,21 +342,21 @@ function Footer() {
         backgroundColor: "var(--color-bg-primary)",
       }}
     >
-      <div className="mx-auto flex max-w-6xl flex-col items-center gap-4 px-6 py-10 text-center">
+      <div className="mx-auto flex max-w-6xl flex-col items-center gap-4 px-5 py-10 text-center sm:px-6">
         <p className="text-sm font-medium text-[var(--color-fg-primary)]">
           Built by Sajid Miya · Full-stack demo
         </p>
-        <ul className="flex items-center gap-4">
+        <ul className="flex items-center justify-center gap-3 sm:gap-4">
           <li>
             <a
               href={GITHUB_URL}
               target="_blank"
               rel="noreferrer"
               aria-label="GitHub"
-              className="flex h-10 w-10 items-center justify-center rounded-full transition hover:bg-[var(--color-bg-tertiary)]"
+              className="flex h-11 w-11 items-center justify-center rounded-full transition hover:bg-[var(--color-bg-tertiary)] active:bg-[var(--color-bg-tertiary)]"
               style={{ color: "var(--color-fg-secondary)" }}
             >
-              <Globe size={18} aria-hidden />
+              <Globe size={20} aria-hidden />
             </a>
           </li>
           <li>
@@ -359,20 +365,20 @@ function Footer() {
               target="_blank"
               rel="noreferrer"
               aria-label="LinkedIn"
-              className="flex h-10 w-10 items-center justify-center rounded-full transition hover:bg-[var(--color-bg-tertiary)]"
+              className="flex h-11 w-11 items-center justify-center rounded-full transition hover:bg-[var(--color-bg-tertiary)] active:bg-[var(--color-bg-tertiary)]"
               style={{ color: "var(--color-fg-secondary)" }}
             >
-              <UserCircle size={18} aria-hidden />
+              <UserCircle size={20} aria-hidden />
             </a>
           </li>
           <li>
             <a
               href={EMAIL_URL}
               aria-label="Email"
-              className="flex h-10 w-10 items-center justify-center rounded-full transition hover:bg-[var(--color-bg-tertiary)]"
+              className="flex h-11 w-11 items-center justify-center rounded-full transition hover:bg-[var(--color-bg-tertiary)] active:bg-[var(--color-bg-tertiary)]"
               style={{ color: "var(--color-fg-secondary)" }}
             >
-              <Mail size={18} aria-hidden />
+              <Mail size={20} aria-hidden />
             </a>
           </li>
         </ul>

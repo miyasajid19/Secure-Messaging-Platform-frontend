@@ -41,6 +41,12 @@ export default function OnboardingPage() {
   const [avatarUrl, setAvatarUrl] = useState(storedUser?.avatar_url ?? "");
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState("");
+  // Phase 10 — hide the optional "image URL" field behind a toggle on
+  // mobile so the small-screen form isn't cluttered. Defaults to
+  // collapsed unless the user already has an avatar URL on file.
+  const [showAdvancedAvatar, setShowAdvancedAvatar] = useState(
+    Boolean(storedUser?.avatar_url),
+  );
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -234,24 +240,43 @@ export default function OnboardingPage() {
             </div>
           </div>
         </div>
-        <label className="flex flex-col gap-1.5">
-          <span className="text-sm font-medium text-[var(--color-fg-secondary)]">
-            Or use an image URL <span className="text-[var(--color-fg-muted)]">(optional)</span>
-          </span>
-          <AuthTextInput
-            type="url"
-            inputMode="url"
-            placeholder="https://example.com/avatar.png"
-            value={avatarUrl}
-            onChange={(e) => {
-              setAvatarUrl(e.target.value);
-              if (e.target.value) setAvatarFile(null);
-            }}
-            disabled={submitting}
-            maxLength={512}
-            aria-label="Avatar URL"
-          />
-        </label>
+        <div>
+          <button
+            type="button"
+            onClick={() => setShowAdvancedAvatar((v) => !v)}
+            aria-expanded={showAdvancedAvatar}
+            aria-controls="avatar-url-field"
+            className="flex min-h-[44px] items-center gap-1 text-sm font-medium text-[var(--color-fg-secondary)] hover:text-[var(--color-fg-primary)]"
+          >
+            <span>Use an image URL instead</span>
+            <span aria-hidden className="text-xs">
+              {showAdvancedAvatar ? "−" : "+"}
+            </span>
+          </button>
+          {showAdvancedAvatar ? (
+            <label
+              id="avatar-url-field"
+              className="mt-2 flex flex-col gap-1.5"
+            >
+              <span className="text-sm font-medium text-[var(--color-fg-secondary)]">
+                Image URL <span className="text-[var(--color-fg-muted)]">(optional)</span>
+              </span>
+              <AuthTextInput
+                type="url"
+                inputMode="url"
+                placeholder="https://example.com/avatar.png"
+                value={avatarUrl}
+                onChange={(e) => {
+                  setAvatarUrl(e.target.value);
+                  if (e.target.value) setAvatarFile(null);
+                }}
+                disabled={submitting}
+                maxLength={512}
+                aria-label="Avatar URL"
+              />
+            </label>
+          ) : null}
+        </div>
         <AuthButton type="submit" disabled={submitting}>
           {submitting ? "Saving…" : "Continue"}
         </AuthButton>

@@ -126,7 +126,7 @@ export function AddContactModal({ open, onClose }: Props) {
       role="dialog"
       aria-modal="true"
       aria-label="Add contact"
-      className="fixed inset-0 z-50 flex items-center justify-center px-4"
+      className="fixed inset-0 z-50 flex items-stretch justify-center bg-[var(--color-bg-secondary)] sm:items-center sm:px-4 sm:py-6"
       style={{ backgroundColor: "rgba(0,0,0,0.35)" }}
       onClick={(e) => {
         // Click on the backdrop closes the modal.
@@ -134,7 +134,7 @@ export function AddContactModal({ open, onClose }: Props) {
       }}
     >
       <div
-        className="w-full max-w-[420px] overflow-hidden rounded-2xl border bg-[var(--color-bg-primary)] shadow-xl"
+        className="flex w-full max-w-[420px] flex-col overflow-hidden border bg-[var(--color-bg-primary)] shadow-xl sm:rounded-2xl sm:border"
         style={{ borderColor: "var(--color-border-subtle)" }}
       >
         <header
@@ -148,9 +148,9 @@ export function AddContactModal({ open, onClose }: Props) {
             type="button"
             aria-label="Close"
             onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--color-fg-secondary)] hover:bg-[var(--color-bg-tertiary)]"
+            className="flex h-11 w-11 items-center justify-center rounded-full text-[var(--color-fg-secondary)] hover:bg-[var(--color-bg-tertiary)] active:bg-[var(--color-bg-tertiary)]"
           >
-            <X size={16} />
+            <X size={18} />
           </button>
         </header>
 

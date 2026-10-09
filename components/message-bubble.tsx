@@ -326,7 +326,7 @@ export function MessageBubble({
             aria-label="Reply"
             title="Reply"
             onClick={openReply}
-            className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--color-fg-secondary)] transition-colors hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-fg-primary)] focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
+            className="flex h-11 w-11 items-center justify-center rounded-full text-[var(--color-fg-secondary)] transition-colors hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-fg-primary)] active:bg-[var(--color-bg-tertiary)] focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
           >
             <CornerUpLeft size={16} aria-hidden />
           </button>
@@ -335,7 +335,7 @@ export function MessageBubble({
             aria-label="React"
             title="React"
             onClick={() => setPickerOpen(true)}
-            className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--color-fg-secondary)] transition-colors hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-fg-primary)] focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
+            className="flex h-11 w-11 items-center justify-center rounded-full text-[var(--color-fg-secondary)] transition-colors hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-fg-primary)] active:bg-[var(--color-bg-tertiary)] focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
           >
             <SmilePlus size={16} aria-hidden />
           </button>
@@ -461,7 +461,7 @@ export function MessageBubble({
               {formatRemaining(remainingMs)}
             </span>
           ) : null}
-          {isOutgoing && !showSeenBy ? (
+          {isOutgoing ? (
             <ReceiptMark
               status={message.status}
               mutedFg={mutedFg}
@@ -764,7 +764,7 @@ function ReactionRow({
             onClick={() => onToggle(group.emoji)}
             aria-pressed={hasMine}
             aria-label={`${display} ${group.emoji} reactions`}
-            className="flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-xs transition hover:opacity-80"
+            className="flex min-h-[28px] items-center gap-1 rounded-full border px-2 py-1 text-xs transition hover:opacity-80 active:opacity-60"
             style={{
               backgroundColor: "var(--color-bg-elevated)",
               borderColor: hasMine
@@ -835,7 +835,7 @@ function EmojiPicker({
             key={emoji}
             type="button"
             onClick={() => onPick(emoji)}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-lg transition hover:bg-[var(--color-bg-tertiary)]"
+            className="flex h-11 w-11 items-center justify-center rounded-lg text-lg transition hover:bg-[var(--color-bg-tertiary)] active:bg-[var(--color-bg-tertiary)]"
             aria-label={`React with ${emoji}`}
           >
             {emoji}
@@ -847,7 +847,7 @@ function EmojiPicker({
           aria-label="More reactions"
           aria-expanded={showMore}
           title={showMore ? "Fewer reactions" : "More reactions"}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-base text-[var(--color-fg-secondary)] transition hover:bg-[var(--color-bg-tertiary)]"
+          className="flex h-11 w-11 items-center justify-center rounded-lg text-base text-[var(--color-fg-secondary)] transition hover:bg-[var(--color-bg-tertiary)] active:bg-[var(--color-bg-tertiary)]"
         >
           {showMore ? "−" : "+"}
         </button>

@@ -409,7 +409,10 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
           ))}
         </div>
       ) : null}
-      <div className="flex items-end gap-2 px-3 py-3">
+      <div
+        className="flex items-end gap-2 px-3 py-3"
+        style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
+      >
       <input
         ref={fileInputRef}
         type="file"
@@ -423,7 +426,7 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
         onClick={() => fileInputRef.current?.click()}
         aria-label="Add attachment"
         disabled={!conversationId || uploading}
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-tertiary)]"
+        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-tertiary)] active:bg-[var(--color-bg-tertiary)]"
       >
         <Paperclip size={18} />
       </button>
@@ -431,7 +434,7 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
         type="button"
         onClick={placeholderFeature("Emoji")}
         aria-label="Open emoji picker"
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-tertiary)]"
+        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-tertiary)] active:bg-[var(--color-bg-tertiary)]"
       >
         <Smile size={18} />
       </button>
@@ -467,7 +470,7 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
         disabled={disabled}
         aria-label={sendAria}
         title={!wsReady ? "Connecting…" : "Send"}
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition disabled:cursor-not-allowed disabled:opacity-50"
+        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition active:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
         style={{
           backgroundColor: "var(--color-accent)",
           color: "var(--color-accent-fg)",

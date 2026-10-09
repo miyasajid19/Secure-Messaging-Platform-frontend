@@ -182,7 +182,7 @@ export function ConversationListPane({
 
   return (
     <aside
-      className="relative flex h-full w-[320px] shrink-0 flex-col border-r"
+      className="relative flex h-full w-full shrink-0 flex-col border-r lg:w-[320px] lg:shrink-0"
       style={{
         backgroundColor: "var(--color-bg-primary)",
         borderColor: "var(--color-border-subtle)",
@@ -199,7 +199,7 @@ export function ConversationListPane({
               <ArrowLeft size={19} />
             </IconButton>
             <h1 className="flex-1 truncate text-center text-lg font-semibold text-[var(--color-fg-primary)]">New chat</h1>
-            <span className="h-9 w-9" aria-hidden />
+            <span className="h-11 w-11" aria-hidden />
           </>
         ) : (
           <div className="flex min-w-0 items-center gap-1">
@@ -451,7 +451,7 @@ function IconButton({
     <button
       type="button"
       {...rest}
-      className="flex h-9 w-9 items-center justify-center rounded-full text-[var(--color-fg-secondary)] transition hover:bg-[var(--color-bg-tertiary)]"
+      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[var(--color-fg-secondary)] transition hover:bg-[var(--color-bg-tertiary)] active:bg-[var(--color-bg-tertiary)]"
     >
       {children}
     </button>
@@ -620,14 +620,14 @@ function ConfirmLogoutModal({
       role="alertdialog"
       aria-modal="true"
       aria-labelledby="confirm-logout-title"
-      className="fixed inset-0 z-50 flex items-center justify-center px-4"
+      className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:px-4 sm:py-6"
       style={{ backgroundColor: "rgba(0,0,0,0.35)" }}
       onClick={(e) => {
         if (e.target === e.currentTarget) onCancel();
       }}
     >
       <div
-        className="w-full max-w-[400px] overflow-hidden rounded-2xl border bg-[var(--color-bg-primary)] shadow-xl"
+        className="w-full max-w-[400px] overflow-hidden border bg-[var(--color-bg-primary)] shadow-xl sm:rounded-2xl"
         style={{ borderColor: "var(--color-border-subtle)" }}
       >
         <header
@@ -641,9 +641,9 @@ function ConfirmLogoutModal({
             type="button"
             aria-label="Close"
             onClick={onCancel}
-            className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--color-fg-secondary)] hover:bg-[var(--color-bg-tertiary)]"
+            className="flex h-11 w-11 items-center justify-center rounded-full text-[var(--color-fg-secondary)] hover:bg-[var(--color-bg-tertiary)] active:bg-[var(--color-bg-tertiary)]"
           >
-            <X size={16} />
+            <X size={18} />
           </button>
         </header>
         <div className="px-4 py-4 text-sm text-[var(--color-fg-secondary)]">

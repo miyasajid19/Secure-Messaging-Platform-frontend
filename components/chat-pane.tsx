@@ -711,9 +711,9 @@ function ChatHeader({
           type="button"
           aria-label="Back"
           onClick={onBack}
-          className="flex h-9 w-9 items-center justify-center rounded-full text-[var(--color-fg-secondary)] hover:bg-[var(--color-bg-tertiary)]"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[var(--color-fg-secondary)] hover:bg-[var(--color-bg-tertiary)] active:bg-[var(--color-bg-tertiary)]"
         >
-          <ArrowLeft size={18} />
+          <ArrowLeft size={20} />
         </button>
       ) : null}
       <ConversationAvatar
@@ -741,6 +741,7 @@ function ChatHeader({
         aria-label="Voice call"
         title="Voice calls — coming soon"
         onClick={() => toast.info("Voice calls — coming soon")}
+        className="hidden sm:flex"
       >
         <Phone size={18} />
       </IconBtn>
@@ -748,10 +749,11 @@ function ChatHeader({
         aria-label="Video call"
         title="Video calls — coming soon"
         onClick={() => toast.info("Video calls — coming soon")}
+        className="hidden sm:flex"
       >
         <Video size={18} />
       </IconBtn>
-      <IconBtn aria-label="Search in conversation" onClick={() => toast.info("Search in chat — coming soon")}>
+      <IconBtn aria-label="Search in conversation" onClick={() => toast.info("Search in chat — coming soon")} className="hidden sm:flex">
         <Search size={18} />
       </IconBtn>
       <div className="relative">
@@ -852,7 +854,7 @@ function IconBtn({
     <button
       type="button"
       {...rest}
-      className="flex h-9 w-9 items-center justify-center rounded-full text-[var(--color-fg-secondary)] transition hover:bg-[var(--color-bg-tertiary)]"
+      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[var(--color-fg-secondary)] transition hover:bg-[var(--color-bg-tertiary)] active:bg-[var(--color-bg-tertiary)]"
     >
       {children}
     </button>

@@ -143,6 +143,8 @@ export interface Conversation {
   members_can_be_added?: boolean;
   /** Phase 6: the current user's role in this group conversation. */
   role?: "admin" | "member";
+  /** Backend field name for the current user's group role. */
+  my_role?: "admin" | "member" | null;
   /** Phase 8.4 — per-conversation disappearing-message timer. One of
    *  the allowed `DisappearingTimer` values (1h, 24h, 1w) or null
    *  for "off". The backend runs a sweep every 30s; messages older
@@ -256,6 +258,18 @@ export const updateProfile = (patch: ProfilePatch) =>
     body: patch,
   });
 
+export const requestPhoneChangeOtp = (phone: string) =>
+  apiFetch<RequestOtpResponse>("/auth/change-phone/request-otp", {
+    method: "POST",
+    body: { phone },
+  });
+
+export const changePhone = (phone: string, otp: string) =>
+  apiFetch<VerifyOtpResponse>("/auth/change-phone", {
+    method: "POST",
+    body: { phone, otp },
+  });
+
 /** Upload an image through the authenticated backend/ImageKit route. */
 export async function uploadImage(file: File): Promise<{ url: string }> {
   const form = new FormData();
@@ -308,7 +322,7 @@ export interface VerifyOtpResponse {
 
 export interface ProfilePatch {
   display_name?: string;
-  username?: string;
+  username?: string | null;
   avatar_url?: string;
 }
 
@@ -433,6 +447,15 @@ export const updateGroupAvatar = (conversationId: number, avatarUrl: string | nu
     `/conversations/${conversationId}/avatar`,
     { method: "PATCH", body: { avatar_url: avatarUrl } },
   );
+
+/** `PATCH /conversations/{id}` — admin-only group name/photo update. */
+export const updateGroupDetails = (
+  conversationId: number,
+  patch: { name?: string; avatar_url?: string | null },
+) => apiFetch<Conversation>(`/conversations/${conversationId}`, {
+  method: "PATCH",
+  body: patch,
+});
 
 /** `POST /conversations/{id}/members` — admin only; adds a user. */
 export interface AddMemberResponse {

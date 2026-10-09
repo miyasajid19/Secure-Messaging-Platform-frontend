@@ -58,7 +58,7 @@ export function AuthTextInput(
   return (
     <input
       {...props}
-      className={`w-full rounded-lg border bg-[var(--color-bg-primary)] px-3 py-2 text-base text-[var(--color-fg-primary)] outline-none transition focus:ring-2 ${
+      className={`w-full min-h-[44px] rounded-lg border bg-[var(--color-bg-primary)] px-3 py-2 text-base text-[var(--color-fg-primary)] outline-none transition focus:ring-2 ${
         props.className ?? ""
       }`}
       style={{
@@ -75,7 +75,7 @@ export function AuthButton(
   return (
     <button
       {...props}
-      className={`inline-flex w-full items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+      className={`inline-flex w-full min-h-[44px] items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition active:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 ${
         props.className ?? ""
       }`}
       style={{

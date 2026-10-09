@@ -12,12 +12,13 @@
  * mount and syncs the URL on tab change so back/forward works.
  */
 
-import { Suspense, useEffect, useState, type FormEvent } from "react";
+import { Suspense, useEffect, useState, type ChangeEvent, type FormEvent } from "react";
 import { useTheme } from "@/lib/theme";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
   Bell,
+  Camera,
   ChartNoAxesCombined,
   HardDrive,
   Heart,
@@ -29,7 +30,7 @@ import {
   User as UserIcon,
 } from "lucide-react";
 import { toast } from "sonner";
-import { ApiError, getMe, updateProfile, type User } from "@/lib/api";
+import { ApiError, changePhone, getMe, requestPhoneChangeOtp, updateProfile, uploadImage, type User } from "@/lib/api";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/store/auth";
 import { queryKeys } from "@/lib/api";
@@ -175,17 +176,21 @@ function SettingsPageInner() {
         </h1>
       </header>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 flex-col overflow-y-auto md:flex-row md:overflow-hidden">
         <nav
-          className="w-56 shrink-0 overflow-y-auto border-r p-2"
+          className="w-full shrink-0 p-2 md:w-56 md:overflow-y-auto md:border-r"
           style={{ borderColor: "var(--color-border-subtle)" }}
           aria-label="Settings sections"
         >
+          {/* Profile card — visible on all viewports. Tapping it
+              opens the Account section. Matches the Signal-Android
+              settings pattern where the profile sits above the
+              section list. */}
           <button
             type="button"
             onClick={() => setSection("account")}
             aria-current={section === "account" ? "page" : undefined}
-            className="mb-3 flex w-full items-center gap-3 rounded-lg px-2.5 py-3 text-left transition hover:bg-[var(--color-bg-tertiary)]"
+            className="mb-3 flex w-full items-center gap-3 rounded-lg px-2.5 py-3 text-left transition hover:bg-[var(--color-bg-tertiary)] active:bg-[var(--color-bg-tertiary)]"
             style={{
               backgroundColor:
                 section === "account" ? "var(--color-bg-tertiary)" : "transparent",
@@ -197,14 +202,14 @@ function SettingsPageInner() {
                 display_name: profile?.display_name || "Your profile",
                 last_seen: profile?.last_seen,
               }}
-              size={40}
+              size={56}
               showOnline={false}
             />
-            <span className="min-w-0">
-              <span className="block truncate text-sm font-semibold text-[var(--color-fg-primary)]">
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-base font-semibold text-[var(--color-fg-primary)]">
                 {profile?.display_name || "Your profile"}
               </span>
-              <span className="block truncate text-xs text-[var(--color-fg-muted)]">
+              <span className="block truncate text-sm text-[var(--color-fg-muted)]">
                 {profile?.phone ?? "Manage your account"}
               </span>
             </span>
@@ -213,14 +218,14 @@ function SettingsPageInner() {
             className="mb-2 border-t"
             style={{ borderColor: "var(--color-border-subtle)" }}
           />
-          <ul className="flex flex-col gap-1">
+          <ul className="flex flex-col gap-0.5">
             {SECTIONS.map((s) => (
               <li key={s.key}>
                 <button
                   type="button"
                   aria-current={section === s.key ? "page" : undefined}
                   onClick={() => setSection(s.key)}
-                  className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm transition hover:bg-[var(--color-bg-tertiary)]"
+                  className="flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 text-left text-sm transition hover:bg-[var(--color-bg-tertiary)] active:bg-[var(--color-bg-tertiary)]"
                   style={{
                     backgroundColor:
                       section === s.key
@@ -229,7 +234,9 @@ function SettingsPageInner() {
                     color: "var(--color-fg-primary)",
                   }}
                 >
-                  {s.icon}
+                  <span className="text-[var(--color-fg-secondary)]">
+                    {s.icon}
+                  </span>
                   <span>{s.label}</span>
                 </button>
               </li>
@@ -238,7 +245,7 @@ function SettingsPageInner() {
         </nav>
 
         <section
-          className="flex-1 overflow-y-auto p-6"
+          className="flex-1 overflow-y-auto p-4 md:p-6"
           aria-label={`${SECTIONS.find((s) => s.key === section)?.label} settings`}
         >
           {section === "account" ? <AccountPanel /> : null}
@@ -271,34 +278,60 @@ function AccountPanel() {
 
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState("");
+  const [usernameDraft, setUsernameDraft] = useState("");
+  const [profilePhoto, setProfilePhoto] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState("");
   const [saving, setSaving] = useState(false);
+  const [phoneDraft, setPhoneDraft] = useState("");
+  const [phoneOtp, setPhoneOtp] = useState("");
+  const [phoneOtpRequested, setPhoneOtpRequested] = useState(false);
+  const [phoneBusy, setPhoneBusy] = useState(false);
 
   useEffect(() => {
     setDraft(me?.display_name ?? "");
-  }, [me?.display_name]);
+    setUsernameDraft(me?.username ?? "");
+    setPhoneDraft(me?.phone ?? "");
+  }, [me?.display_name, me?.username, me?.phone]);
+
+  useEffect(() => {
+    if (!profilePhoto) { setPhotoPreview(""); return; }
+    const url = URL.createObjectURL(profilePhoto);
+    setPhotoPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [profilePhoto]);
 
   if (!me) {
     return (
       <p className="text-sm text-[var(--color-fg-muted)]">Loading…</p>
     );
   }
+  const currentUser = me;
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmed = draft.trim();
-    if (trimmed === (me?.display_name ?? "")) {
+    const normalizedUsername = usernameDraft.trim().replace(/^@/, "");
+    const patch: { display_name?: string; username?: string | null; avatar_url?: string } = {};
+    if (trimmed !== (currentUser.display_name ?? "")) patch.display_name = trimmed;
+    if (normalizedUsername !== (currentUser.username ?? "")) patch.username = normalizedUsername || null;
+    if (!profilePhoto && Object.keys(patch).length === 0) {
       toast.info("No changes to save");
       return;
     }
     setSaving(true);
     try {
-      const updated: User = await updateProfile({ display_name: trimmed });
+      if (profilePhoto) {
+        // Upload first, then save the returned URL through the profile API.
+        patch.avatar_url = (await uploadImage(profilePhoto)).url;
+      }
+      const updated: User = await updateProfile(patch);
       // Refresh both the auth store and the cached me query.
       useAuthStore.getState().setAuth(
         useAuthStore.getState().token ?? "",
         updated,
       );
       void queryClient.setQueryData(queryKeys.me, updated);
+      setProfilePhoto(null);
       toast.success("Profile updated");
     } catch (err) {
       const msg =
@@ -307,6 +340,48 @@ function AccountPanel() {
     } finally {
       setSaving(false);
     }
+  }
+
+  async function requestPhoneCode() {
+    const phone = phoneDraft.trim();
+    if (!/^\+[1-9]\d{1,14}$/.test(phone)) {
+      toast.error("Enter a valid phone number with country code");
+      return;
+    }
+    setPhoneBusy(true);
+    try {
+      const response = await requestPhoneChangeOtp(phone);
+      setPhoneOtpRequested(true);
+      toast.success(response.sent ? `Verification code: ${response.debug_otp}` : "Couldn't request a code");
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : "Couldn't request verification code");
+    } finally { setPhoneBusy(false); }
+  }
+
+  async function verifyPhoneChange(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPhoneBusy(true);
+    try {
+      const response = await changePhone(phoneDraft.trim(), phoneOtp.trim());
+      useAuthStore.getState().setAuth(response.token, response.user);
+      void queryClient.setQueryData(queryKeys.me, response.user);
+      setPhoneOtpRequested(false);
+      setPhoneOtp("");
+      toast.success("Phone number updated");
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : "Couldn't update phone number");
+    } finally { setPhoneBusy(false); }
+  }
+
+  function onPhotoSelected(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (!file.type.startsWith("image/") || file.type === "image/svg+xml" || file.size > 5 * 1024 * 1024) {
+      toast.error("Choose an image up to 5 MB");
+      return;
+    }
+    setProfilePhoto(file);
   }
 
   return (
@@ -318,6 +393,13 @@ function AccountPanel() {
       <h2 className="text-base font-semibold text-[var(--color-fg-primary)]">
         Account
       </h2>
+      <div className="flex items-center gap-3">
+        <Avatar subject={{ avatar_url: photoPreview || me.avatar_url || "", display_name: me.display_name ?? me.username ?? me.phone }} size={64} showOnline={false} />
+        <label htmlFor="settings-profile-photo" className="inline-flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm text-[var(--color-fg-primary)] hover:bg-[var(--color-bg-tertiary)]" style={{ borderColor: "var(--color-border-subtle)" }}>
+          <Camera size={16} />{profilePhoto ? "Change photo" : "Update profile photo"}
+        </label>
+        <input id="settings-profile-photo" type="file" accept="image/*" className="sr-only" onChange={onPhotoSelected} />
+      </div>
       <Field label="Display name">
         <input
           type="text"
@@ -330,29 +412,28 @@ function AccountPanel() {
           aria-label="Display name"
         />
       </Field>
+      <Field label="Username">
+        <input type="text" value={usernameDraft} onChange={(event) => setUsernameDraft(event.target.value)} maxLength={64} placeholder="Choose a username" disabled={saving} className="w-full rounded-lg border bg-[var(--color-bg-secondary)] px-3 py-2 text-sm text-[var(--color-fg-primary)] outline-none focus:ring-2 focus:ring-[var(--color-accent)] disabled:opacity-60" style={{ borderColor: "var(--color-border-subtle)" }} aria-label="Username" />
+        <p className="mt-1 text-xs text-[var(--color-fg-muted)]">People can find you by username.</p>
+      </Field>
       <Field label="Phone">
         <input
           type="tel"
-          value={me.phone}
-          readOnly
-          className="w-full cursor-not-allowed rounded-lg border bg-[var(--color-bg-secondary)] px-3 py-2 text-sm text-[var(--color-fg-muted)] outline-none"
+          value={phoneDraft}
+          onChange={(event) => { setPhoneDraft(event.target.value); setPhoneOtpRequested(false); }}
+          disabled={phoneBusy}
+          className="w-full rounded-lg border bg-[var(--color-bg-secondary)] px-3 py-2 text-sm text-[var(--color-fg-primary)] outline-none"
           style={{ borderColor: "var(--color-border-subtle)" }}
-          aria-label="Phone (read-only)"
+          aria-label="Phone number"
         />
-      </Field>
-      <Field label="Avatar URL">
-        <input
-          type="url"
-          value={me.avatar_url ?? ""}
-          readOnly
-          placeholder="(set via /auth/profile)"
-          className="w-full cursor-not-allowed rounded-lg border bg-[var(--color-bg-secondary)] px-3 py-2 text-sm text-[var(--color-fg-muted)] outline-none placeholder:text-[var(--color-fg-muted)]"
-          style={{ borderColor: "var(--color-border-subtle)" }}
-          aria-label="Avatar URL (read-only)"
-        />
-        <p className="mt-1 text-xs text-[var(--color-fg-muted)]">
-          Phone + avatar URL are managed by the backend for v1.
-        </p>
+        {phoneDraft.trim() !== currentUser.phone ? (
+          phoneOtpRequested ? (
+            <form onSubmit={verifyPhoneChange} className="mt-2 flex gap-2">
+              <input inputMode="numeric" value={phoneOtp} onChange={(event) => setPhoneOtp(event.target.value)} placeholder="Verification code" className="min-w-0 flex-1 rounded-lg border bg-[var(--color-bg-secondary)] px-3 py-2 text-sm text-[var(--color-fg-primary)] outline-none" style={{ borderColor: "var(--color-border-subtle)" }} aria-label="Verification code" />
+              <button type="submit" disabled={phoneBusy || !phoneOtp.trim()} className="rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-50" style={{ backgroundColor: "var(--color-accent)", color: "var(--color-accent-fg)" }}>{phoneBusy ? "Verifying…" : "Verify"}</button>
+            </form>
+          ) : <button type="button" onClick={() => void requestPhoneCode()} disabled={phoneBusy} className="mt-2 rounded-lg border px-3 py-2 text-sm text-[var(--color-fg-primary)] disabled:opacity-50" style={{ borderColor: "var(--color-border-subtle)" }}>{phoneBusy ? "Requesting…" : "Verify new number"}</button>
+        ) : null}
       </Field>
       <div>
         <button

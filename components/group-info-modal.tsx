@@ -48,6 +48,7 @@ import {
   searchUsers,
   setDisappearingTimer,
   updateGroupAvatar,
+  updateGroupDetails,
   uploadImage,
   DISAPPEARING_TIMER_OPTIONS,
   type Conversation,
@@ -73,7 +74,7 @@ export function GroupInfoModal({
 }: Props) {
   const queryClient = useQueryClient();
 
-  const isAdmin = conversation.role === "admin";
+  const isAdmin = (conversation.my_role ?? conversation.role) === "admin";
   const presenceByUser = useRealtimeStore((s) => s.presenceByUser);
 
   const [nameDraft, setNameDraft] = useState(conversation.name ?? "");
@@ -154,6 +155,18 @@ export function GroupInfoModal({
     },
   });
 
+  const groupDetailsMutation = useMutation({
+    mutationFn: () => updateGroupDetails(conversation.id, { name: nameDraft.trim() }),
+    onSuccess: (updated) => {
+      queryClient.setQueryData<Conversation[]>(queryKeys.conversations, (items) =>
+        items?.map((item) => item.id === updated.id ? updated : item),
+      );
+      toast.success("Group name updated");
+    },
+    onError: (error) => toast.error(error instanceof ApiError ? error.message : "Couldn't update group name"),
+    onSettled: refresh,
+  });
+
   const timerMutation = useMutation({
     mutationFn: (seconds: number | null) =>
       setDisappearingTimer(conversation.id, seconds),
@@ -206,9 +219,9 @@ export function GroupInfoModal({
   });
 
   const promoteMutation = useMutation({
-    mutationFn: (userId: number) => promoteMember(conversation.id, userId, "admin"),
-    onSuccess: () => {
-      toast.success("Promoted to admin");
+    mutationFn: ({ userId, role }: { userId: number; role: "admin" | "member" }) => promoteMember(conversation.id, userId, role),
+    onSuccess: (_data, variables) => {
+      toast.success(variables.role === "admin" ? "Promoted to admin" : "Admin role removed");
       refresh();
     },
     onError: (err) => {
@@ -252,14 +265,14 @@ export function GroupInfoModal({
       role="dialog"
       aria-modal="true"
       aria-label={`${conversation.type === "group" ? "Group" : "Contact"} info for ${conversation.name ?? "this conversation"}`}
-      className="fixed inset-0 z-50 flex items-center justify-center px-4"
+      className="fixed inset-0 z-50 flex items-stretch justify-center sm:items-center sm:px-4 sm:py-6"
       style={{ backgroundColor: "rgba(0,0,0,0.35)" }}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
       <div
-        className="flex max-h-[88vh] w-full max-w-[480px] flex-col overflow-hidden rounded-2xl border bg-[var(--color-bg-primary)] shadow-xl"
+        className="flex w-full max-w-[480px] flex-col overflow-hidden border bg-[var(--color-bg-primary)] shadow-xl sm:max-h-[88vh] sm:rounded-2xl"
         style={{ borderColor: "var(--color-border-subtle)" }}
       >
         <header
@@ -273,9 +286,9 @@ export function GroupInfoModal({
             type="button"
             aria-label="Close"
             onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--color-fg-secondary)] hover:bg-[var(--color-bg-tertiary)]"
+            className="flex h-11 w-11 items-center justify-center rounded-full text-[var(--color-fg-secondary)] hover:bg-[var(--color-bg-tertiary)] active:bg-[var(--color-bg-tertiary)]"
           >
-            <X size={16} />
+            <X size={18} />
           </button>
         </header>
 
@@ -383,14 +396,24 @@ export function GroupInfoModal({
               Name
             </label>
             {isAdmin ? (
-              <input
-                value={nameDraft}
-                disabled
-                readOnly
-                title="(Phase 7 will wire name editing)"
-                className="mt-1 w-full rounded-lg border bg-[var(--color-bg-secondary)] px-3 py-2 text-sm text-[var(--color-fg-primary)] outline-none focus:ring-2 focus:ring-[var(--color-accent)] disabled:opacity-70"
-                style={{ borderColor: "var(--color-border-subtle)" }}
-              />
+              <div className="mt-1 flex gap-2">
+                <input
+                  value={nameDraft}
+                  maxLength={128}
+                  onChange={(event) => setNameDraft(event.target.value)}
+                  disabled={groupDetailsMutation.isPending}
+                  className="min-w-0 flex-1 rounded-lg border bg-[var(--color-bg-secondary)] px-3 py-2 text-sm text-[var(--color-fg-primary)] outline-none focus:ring-2 focus:ring-[var(--color-accent)] disabled:opacity-70"
+                  style={{ borderColor: "var(--color-border-subtle)" }}
+                  aria-label="Group name"
+                />
+                <button
+                  type="button"
+                  onClick={() => groupDetailsMutation.mutate()}
+                  disabled={groupDetailsMutation.isPending || !nameDraft.trim() || nameDraft.trim() === (conversation.name ?? "")}
+                  className="rounded-lg px-3 py-2 text-xs font-semibold disabled:opacity-50"
+                  style={{ backgroundColor: "var(--color-accent)", color: "var(--color-accent-fg)" }}
+                >{groupDetailsMutation.isPending ? "Saving…" : "Save"}</button>
+              </div>
             ) : (
               <p className="mt-1 text-sm text-[var(--color-fg-primary)]">
                 {conversation.name ?? "(unnamed)"}
@@ -510,20 +533,20 @@ export function GroupInfoModal({
                     ) : null}
                     {isAdmin && !isSelf ? (
                       <div className="flex items-center gap-1">
-                        {!isParticipantAdmin ? (
-                          <button
-                            type="button"
-                            onClick={() => promoteMutation.mutate(p.id)}
-                            className="rounded px-2 py-1 text-xs text-[var(--color-accent)] hover:bg-[var(--color-bg-tertiary)]"
-                          >
-                            Promote
-                          </button>
-                        ) : null}
                         <button
                           type="button"
+                          disabled={promoteMutation.isPending}
+                          onClick={() => promoteMutation.mutate({ userId: p.id, role: isParticipantAdmin ? "member" : "admin" })}
+                          className="rounded px-2 py-1 text-xs text-[var(--color-accent)] hover:bg-[var(--color-bg-tertiary)] disabled:opacity-50"
+                        >
+                          {isParticipantAdmin ? "Remove admin" : "Make admin"}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={removeMutation.isPending}
                           onClick={() => removeMutation.mutate(p.id)}
                           aria-label={`Remove ${p.display_name ?? p.phone}`}
-                          className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-status-error)]"
+                          className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-status-error)] disabled:opacity-50"
                         >
                           <UserMinus size={14} />
                         </button>
