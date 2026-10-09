@@ -1,4 +1,4 @@
-# Signal Clone — Frontend
+# Secure Messaging Platfrom — Frontend
 
 Next.js 16 (App Router) + TypeScript + Tailwind v4 + Zustand + TanStack Query. Talks to the FastAPI backend at `../backend/` over REST + a single WebSocket. The full architecture is in `../PLAN.md`.
 
@@ -228,16 +228,6 @@ frontend/
 │   ├── ui.ts                # selected conversation, modal flags
 │   ├── realtime.ts          # typing + presence
 │   └── reply.ts             # reply/quoted target
-├── scripts/                  # Playwright verification scripts (Python)
-│   ├── walk_auth_flow.py
-│   ├── verify_phase3.py / 4 / 5 / 6 / 7
-│   ├── verify_realtime_reception.py
-│   ├── verify_logout_promotion.py
-│   ├── verify_direct_title.py
-│   ├── verify_replies.py / reactions.py / disappearing.py / dark_mode.py
-│   ├── verify_no_self_in_group.py
-│   ├── verify_no_dup_send.py
-│   └── verify_seen_by.py
 ├── public/                   # static assets
 ├── next.config.ts
 ├── tsconfig.json
@@ -245,29 +235,6 @@ frontend/
 ├── package.json
 └── README.md
 ```
-
-## Verification scripts
-
-`scripts/verify_*.py` are Playwright walks that drive the live frontend against the backend. They live in the repo so anyone can re-run them after a change:
-
-```bash
-# Backend running at localhost:8000 with seeded data.
-# Frontend running at localhost:3000.
-
-# Single-user scripts (no second context)
-python scripts/verify_phase3.py            # shell renders, 3-pane layout
-python scripts/verify_phase4.py            # live API + add contact
-python scripts/verify_direct_title.py      # direct-conv title fix
-python scripts/verify_logout_promotion.py  # settings menu + confirm modal
-python scripts/verify_dark_mode.py         # theme toggle flips <html data-theme>
-
-# Two-context scripts
-python scripts/verify_realtime_reception.py  # Alice sends → Bob sees < 1s
-python scripts/verify_replies.py             # reply flow end-to-end
-python scripts/verify_reactions.py           # reactions end-to-end
-```
-
-Exit 0 on success; non-zero on first failed assertion. Most tests assume the seed is loaded (`python -m app.seed` from the backend dir).
 
 ## Locked decisions
 

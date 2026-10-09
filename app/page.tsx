@@ -8,13 +8,12 @@ import { ApiError, requestOtp } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
 
 const DEMO_ACCOUNTS = [
-  { name: "Alice Chen", phone: "+15550000001" },
-  { name: "Bob Martinez", phone: "+15550000002" },
-  { name: "Carol Singh", phone: "+15550000003" },
-  { name: "Dan O'Brien", phone: "+15550000004" },
-  { name: "Eve Tanaka", phone: "+15550000005" },
-  { name: "Maya Brooks", phone: "+15550000006" },
-  { name: "Noah Williams", phone: "+15550000007" },
+  { name: "Sajid Miya", phone: "+919000000001" },
+  { name: "Aasif Miya", phone: "+919000000002" },
+  { name: "Ajmal Miya", phone: "+919000000003" },
+  { name: "Sajjan Karn", phone: "+919000000004" },
+  { name: "Sakshyam Pokhrel", phone: "+919000000005" },
+  { name: "Raman Shrestha", phone: "+919000000006" },
 ] as const;
 
 export default function SignInPage() {
@@ -102,7 +101,7 @@ export default function SignInPage() {
                 setPhone(event.target.value);
                 setSelectedPhone(null);
               }}
-              placeholder="+1 555 000 0001"
+              placeholder="+91 90000 00001"
               disabled={submitting}
               className="min-h-12 w-full rounded-xl border bg-[var(--color-bg-primary)] py-2 pl-10 pr-3 text-base text-[var(--color-fg-primary)] outline-none transition focus:border-[var(--color-accent)] focus:ring-4 focus:ring-blue-500/10 disabled:opacity-60"
               style={{ borderColor: "var(--color-border-default)" }}

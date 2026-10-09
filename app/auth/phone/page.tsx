@@ -60,7 +60,7 @@ export default function PhonePage() {
               inputMode="tel"
               autoFocus
               autoComplete="tel"
-              placeholder="+15550000001"
+              placeholder="+919000000001"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               disabled={submitting}
