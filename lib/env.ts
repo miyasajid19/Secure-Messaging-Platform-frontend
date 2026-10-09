@@ -1,9 +1,9 @@
 /**
  * Typed access to public environment variables.
  *
- * All `NEXT_PUBLIC_*` vars are inlined into the client bundle at build time,
- * so we read them via direct property access on `process.env` (dynamic lookups
- * are NOT inlined by Next.js).
+ * All `NEXT_PUBLIC_*` vars are inlined into the client bundle at build time.
+ * They must be referenced directly as `process.env.NEXT_PUBLIC_*`; dynamic
+ * lookups are not replaced in browser bundles and silently select defaults.
  *
  * See: https://nextjs.org/docs/app/guides/environment-variables
  *
@@ -20,15 +20,9 @@ type PublicEnv = {
   wsUrl: string;
 };
 
-function readOrDefault(name: string, fallback: string): string {
-  // `process.env[name]` works at build time but is not reliably typed.
-  // We use bracket access on a typed record to satisfy TS without losing inlining.
-  const value = (process.env as Record<string, string | undefined>)[name];
-  if (value && value.length > 0) return value;
-  return fallback;
-}
-
+// Keep these as static property references. Next.js replaces them with
+// the values loaded from the frontend .env when the dev server/build starts.
 export const env: PublicEnv = {
-  apiUrl: readOrDefault("NEXT_PUBLIC_API_URL", "http://localhost:8000"),
-  wsUrl: readOrDefault("NEXT_PUBLIC_WS_URL", "wss://secure-messaging-platform-backend.onrender.com/ws"),
+  apiUrl: process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000",
+  wsUrl: process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000/ws",
 };
