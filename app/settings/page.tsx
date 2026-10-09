@@ -15,34 +15,100 @@
 import { Suspense, useEffect, useState, type FormEvent } from "react";
 import { useTheme } from "@/lib/theme";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, Bell, Lock, Sun, User as UserIcon } from "lucide-react";
+import {
+  ArrowLeft,
+  Bell,
+  ChartNoAxesCombined,
+  HardDrive,
+  Heart,
+  Lock,
+  MessageCircle,
+  Phone,
+  Settings2,
+  Sun,
+  User as UserIcon,
+} from "lucide-react";
 import { toast } from "sonner";
 import { ApiError, getMe, updateProfile, type User } from "@/lib/api";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/store/auth";
 import { queryKeys } from "@/lib/api";
 import { useNotificationSound } from "@/lib/notification-sound";
+import { Avatar } from "@/components/avatar";
 
-type Section = "account" | "privacy" | "notifications" | "appearance";
+type Section =
+  | "account"
+  | "donate"
+  | "general"
+  | "appearance"
+  | "chats"
+  | "calls"
+  | "notifications"
+  | "privacy"
+  | "data-usage"
+  | "backups";
 
 const SECTIONS: Array<{
   key: Section;
   label: string;
   icon: React.ReactNode;
+  description?: string;
 }> = [
   { key: "account", label: "Account", icon: <UserIcon size={14} aria-hidden /> },
-  { key: "privacy", label: "Privacy", icon: <Lock size={14} aria-hidden /> },
+  {
+    key: "donate",
+    label: "Donate to Signal",
+    icon: <Heart size={14} aria-hidden />,
+    description: "Donation options will be available in a future update.",
+  },
+  {
+    key: "general",
+    label: "General",
+    icon: <Settings2 size={14} aria-hidden />,
+    description: "General app preferences are coming soon.",
+  },
+  { key: "appearance", label: "Appearance", icon: <Sun size={14} aria-hidden /> },
+  {
+    key: "chats",
+    label: "Chats",
+    icon: <MessageCircle size={14} aria-hidden />,
+    description: "Chat preferences and message options are coming soon.",
+  },
+  {
+    key: "calls",
+    label: "Calls",
+    icon: <Phone size={14} aria-hidden />,
+    description: "Voice and video call settings are coming soon.",
+  },
   {
     key: "notifications",
     label: "Notifications",
     icon: <Bell size={14} aria-hidden />,
   },
-  { key: "appearance", label: "Appearance", icon: <Sun size={14} aria-hidden /> },
+  { key: "privacy", label: "Privacy", icon: <Lock size={14} aria-hidden /> },
+  {
+    key: "data-usage",
+    label: "Data usage",
+    icon: <ChartNoAxesCombined size={14} aria-hidden />,
+    description: "Data and storage controls are coming soon.",
+  },
+  {
+    key: "backups",
+    label: "Backups",
+    icon: <HardDrive size={14} aria-hidden />,
+    description: "Message backup options are coming soon.",
+  },
 ];
 
 function isSection(v: string | null): v is Section {
   return (
     v === "account" ||
+    v === "donate" ||
+    v === "general" ||
+    v === "chats" ||
+    v === "calls" ||
+    v === "data-usage" ||
+    v === "backups" ||
     v === "privacy" ||
     v === "notifications" ||
     v === "appearance"
@@ -68,6 +134,7 @@ function SettingsSkeleton() {
 function SettingsPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const profile = useAuthStore((s) => s.user);
   const initial = searchParams.get("section");
   const [section, setSection] = useState<Section>(
     isSection(initial) ? initial : "account",
@@ -110,10 +177,42 @@ function SettingsPageInner() {
 
       <div className="flex flex-1 overflow-hidden">
         <nav
-          className="w-56 shrink-0 border-r p-2"
+          className="w-56 shrink-0 overflow-y-auto border-r p-2"
           style={{ borderColor: "var(--color-border-subtle)" }}
           aria-label="Settings sections"
         >
+          <button
+            type="button"
+            onClick={() => setSection("account")}
+            aria-current={section === "account" ? "page" : undefined}
+            className="mb-3 flex w-full items-center gap-3 rounded-lg px-2.5 py-3 text-left transition hover:bg-[var(--color-bg-tertiary)]"
+            style={{
+              backgroundColor:
+                section === "account" ? "var(--color-bg-tertiary)" : "transparent",
+            }}
+          >
+            <Avatar
+              subject={{
+                avatar_url: profile?.avatar_url ?? "",
+                display_name: profile?.display_name || "Your profile",
+                last_seen: profile?.last_seen,
+              }}
+              size={40}
+              showOnline={false}
+            />
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-semibold text-[var(--color-fg-primary)]">
+                {profile?.display_name || "Your profile"}
+              </span>
+              <span className="block truncate text-xs text-[var(--color-fg-muted)]">
+                {profile?.phone ?? "Manage your account"}
+              </span>
+            </span>
+          </button>
+          <div
+            className="mb-2 border-t"
+            style={{ borderColor: "var(--color-border-subtle)" }}
+          />
           <ul className="flex flex-col gap-1">
             {SECTIONS.map((s) => (
               <li key={s.key}>
@@ -146,6 +245,14 @@ function SettingsPageInner() {
           {section === "privacy" ? <PrivacyPanel /> : null}
           {section === "notifications" ? <NotificationsPanel /> : null}
           {section === "appearance" ? <AppearancePanel /> : null}
+          {!["account", "privacy", "notifications", "appearance"].includes(
+            section,
+          ) ? (
+            <ComingSoonPanel
+              title={SECTIONS.find((item) => item.key === section)?.label ?? "Settings"}
+              description={SECTIONS.find((item) => item.key === section)?.description}
+            />
+          ) : null}
         </section>
       </div>
     </main>
@@ -261,6 +368,33 @@ function AccountPanel() {
         </button>
       </div>
     </form>
+  );
+}
+
+function ComingSoonPanel({
+  title,
+  description,
+}: {
+  title: string;
+  description?: string;
+}) {
+  return (
+    <div className="flex max-w-[480px] flex-col gap-3" aria-label={title}>
+      <h2 className="text-base font-semibold text-[var(--color-fg-primary)]">
+        {title}
+      </h2>
+      <div
+        className="rounded-lg border px-4 py-4"
+        style={{ borderColor: "var(--color-border-subtle)" }}
+      >
+        <p className="text-sm text-[var(--color-fg-secondary)]">
+          {description ?? `${title} settings are coming soon.`}
+        </p>
+        <span className="mt-3 inline-flex rounded-full bg-[var(--color-bg-tertiary)] px-2.5 py-1 text-xs text-[var(--color-fg-muted)]">
+          Coming soon
+        </span>
+      </div>
+    </div>
   );
 }
 

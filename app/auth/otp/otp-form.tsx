@@ -51,7 +51,7 @@ export function OtpForm() {
     try {
       const { token, user } = await verifyOtp(phone, trimmed);
       setAuth(token, user);
-      router.push(user.display_name ? "/" : "/onboarding");
+      router.push(user.display_name && user.username ? "/" : "/onboarding");
     } catch (error) {
       const message = error instanceof ApiError ? error.message : "Invalid code";
       toast.error(message);

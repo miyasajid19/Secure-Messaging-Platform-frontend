@@ -15,7 +15,7 @@
  */
 
 import { Check, CheckCheck } from "lucide-react";
-import { Avatar } from "./avatar";
+import { ConversationAvatar } from "./conversation-avatar";
 import {
   type Conversation,
   type MessagePreview,
@@ -24,6 +24,7 @@ import { formatConversationTimestamp } from "@/lib/format";
 import { useRealtimeStore } from "@/store/realtime";
 import { useAuthStore } from "@/store/auth";
 import { conversationTitle } from "@/lib/conversation-title";
+import { useDraftStore } from "@/store/drafts";
 
 interface Props {
   conversation: Conversation;
@@ -100,7 +101,8 @@ function previewFromLastMessage(
     const name = sender?.display_name?.split(" ")[0] ?? "Someone";
     prefix = `${name}: `;
   }
-  return `${prefix}${truncate(last.content, 48)}`;
+  const content = last.content || (last.type === "image" ? "📷 Photo" : "📎 Attachment");
+  return `${prefix}${truncate(content, 48)}`;
 }
 
 function truncate(text: string, max: number): string {
@@ -125,6 +127,7 @@ export function ConversationListRow({
     conversation,
     currentUserId,
   );
+  const draft = useDraftStore((s) => s.drafts[conversation.id] ?? "");
 
   // Subscribe to the realtime presence store so the green dot lights
   // up the moment the WS tells us the other party connected.
@@ -143,17 +146,16 @@ export function ConversationListRow({
       type="button"
       onClick={() => onSelect(conversation.id)}
       aria-pressed={selected}
-      className="flex w-full items-center gap-3 px-3 py-2 text-left transition hover:bg-[var(--color-bg-tertiary)]"
+      className="mx-2 my-1 flex w-[calc(100%-1rem)] items-center gap-3 rounded-xl px-3 py-3 text-left transition hover:bg-[var(--color-bg-tertiary)]"
       style={{
         backgroundColor: selected ? "var(--color-bg-tertiary)" : undefined,
       }}
     >
-      <Avatar
-        subject={{
-          avatar_url: avatar.avatar_url ?? "",
-          display_name: avatar.display_name,
-          last_seen: avatar.last_seen ?? null,
-        }}
+      <ConversationAvatar
+        avatarUrl={avatar.avatar_url}
+        displayName={avatar.display_name}
+        isGroup={conversation.type === "group"}
+        size={52}
         online={otherOnline}
       />
       <div className="flex min-w-0 flex-1 flex-col">
@@ -168,7 +170,16 @@ export function ConversationListRow({
               : "var(--color-fg-secondary)",
           }}
         >
-          {preview}
+          {draft.trim() ? (
+            <>
+              <span className="mr-1 font-medium italic text-[var(--color-fg-secondary)]">
+                Draft:
+              </span>
+              <span className="italic">{truncate(draft.trim(), 44)}</span>
+            </>
+          ) : (
+            preview
+          )}
         </span>
       </div>
       <div className="flex shrink-0 flex-col items-end gap-1">

@@ -18,13 +18,19 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  AtSign,
+  ArrowLeft,
+  Hash,
   LogOut,
   Lock,
-  Pencil,
+  ListFilter,
+  Menu,
+  MessageSquarePlus,
+  MoreHorizontal,
+  Plus,
   Search,
-  Settings2,
   Sun,
   User,
   Users,
@@ -35,25 +41,37 @@ import {
   ConversationListRow,
 } from "./conversation-list-row";
 import { EmptyState } from "./empty-state";
-import { AddContactModal } from "./add-contact-modal";
+import { Avatar } from "./avatar";
 import { NewGroupModal } from "./new-group-modal";
 import {
   ApiError,
+  addContact,
   listConversations,
+  listContacts,
   queryKeys,
+  searchUsers,
   type Conversation,
+  type Contact,
+  type UserSearchResult,
 } from "@/lib/api";
 import { useUiStore } from "@/store/ui";
 import { useAuthStore } from "@/store/auth";
 import { performLogout } from "@/lib/auth-actions";
-import { MessageSquarePlus } from "lucide-react";
 import { SHORTCUT_SEARCH_EVENT } from "@/app/providers";
 
 const DEBOUNCE_MS = 150;
+type ConversationFilter = "all" | "unread" | "groups" | "direct";
 
-export function ConversationListPane() {
+export function ConversationListPane({
+  navigationHidden = false,
+  onShowNavigation,
+}: {
+  navigationHidden?: boolean;
+  onShowNavigation?: () => void;
+}) {
   const setSelected = useUiStore((s) => s.setSelected);
   const selectedId = useUiStore((s) => s.selectedConversationId);
+  const queryClient = useQueryClient();
 
   const conversationsQuery = useQuery({
     queryKey: queryKeys.conversations,
@@ -75,7 +93,15 @@ export function ConversationListPane() {
   // Debounce the search input.
   const [searchInput, setSearchInput] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [conversationFilter, setConversationFilter] =
+    useState<ConversationFilter>("all");
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [showNewChat, setShowNewChat] = useState(false);
+  const [newChatInput, setNewChatInput] = useState("");
+  const [newChatSearch, setNewChatSearch] = useState("");
+  const [searchMode, setSearchMode] = useState<"all" | "username" | "phone">("all");
   const searchRef = useRef<HTMLInputElement | null>(null);
+  const newChatSearchRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
     const id = window.setTimeout(
       () => setDebouncedSearch(searchInput.trim().toLowerCase()),
@@ -83,6 +109,36 @@ export function ConversationListPane() {
     );
     return () => window.clearTimeout(id);
   }, [searchInput]);
+
+  useEffect(() => {
+    const id = window.setTimeout(() => setNewChatSearch(newChatInput.trim()), DEBOUNCE_MS);
+    return () => window.clearTimeout(id);
+  }, [newChatInput]);
+
+  const contactsQuery = useQuery({
+    queryKey: queryKeys.contacts,
+    queryFn: listContacts,
+    enabled: showNewChat,
+    staleTime: 30_000,
+  });
+  const newChatQuery = useQuery({
+    queryKey: queryKeys.userSearch(newChatSearch),
+    queryFn: () => searchUsers(newChatSearch),
+    enabled: showNewChat && newChatSearch.length > 0,
+    staleTime: 30_000,
+  });
+  const addContactMutation = useMutation({
+    mutationFn: (phone: string) => addContact(phone),
+    onSuccess: (conversation) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.conversations });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.contacts });
+      setSelected(conversation.id);
+      setShowNewChat(false);
+      setNewChatInput("");
+      toast.success(`Added ${conversation.name ?? "contact"}`);
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Couldn't add contact"),
+  });
 
   // ⌘K / `/` shortcut listener. The actual keydown handler is in
   // `app/providers.tsx`; we just listen for the dispatch event.
@@ -100,11 +156,18 @@ export function ConversationListPane() {
   const conversations = conversationsQuery.data ?? [];
 
   const filtered = useMemo(() => {
-    if (!debouncedSearch) return conversations;
-    return conversations.filter((c) => matches(c, debouncedSearch));
-  }, [conversations, debouncedSearch]);
+    return conversations.filter((conversation) => {
+      const matchesSearch =
+        !debouncedSearch || matches(conversation, debouncedSearch);
+      const matchesFilter =
+        conversationFilter === "all" ||
+        (conversationFilter === "unread" && conversation.unread_count > 0) ||
+        (conversationFilter === "groups" && conversation.type === "group") ||
+        (conversationFilter === "direct" && conversation.type === "direct");
+      return matchesSearch && matchesFilter;
+    });
+  }, [conversations, conversationFilter, debouncedSearch]);
 
-  const [modalOpen, setModalOpen] = useState(false);
   const [groupModalOpen, setGroupModalOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [confirmLogout, setConfirmLogout] = useState(false);
@@ -130,37 +193,94 @@ export function ConversationListPane() {
         className="flex items-center justify-between gap-2 px-4 pb-3 pt-5"
         style={{ borderBottom: "1px solid var(--color-border-subtle)" }}
       >
-        <h1 className="truncate text-lg font-semibold text-[var(--color-fg-primary)]">
-          Chats
-        </h1>
+        {showNewChat ? (
+          <>
+            <IconButton aria-label="Back to chats" title="Back" onClick={() => setShowNewChat(false)}>
+              <ArrowLeft size={19} />
+            </IconButton>
+            <h1 className="flex-1 truncate text-center text-lg font-semibold text-[var(--color-fg-primary)]">New chat</h1>
+            <span className="h-9 w-9" aria-hidden />
+          </>
+        ) : (
+          <div className="flex min-w-0 items-center gap-1">
+            {navigationHidden ? (
+              <IconButton aria-label="Show navigation" title="Show navigation" onClick={onShowNavigation}>
+                <Menu size={20} />
+              </IconButton>
+            ) : null}
+            <h1 className="truncate text-lg font-semibold text-[var(--color-fg-primary)]">Chats</h1>
+          </div>
+        )}
+        {!showNewChat ? (
         <div className="flex items-center gap-1">
-          <IconButton
-            aria-label="New group"
-            title="New group"
-            onClick={() => setGroupModalOpen(true)}
-          >
-            <Users size={18} />
-          </IconButton>
           <IconButton
             aria-label="New chat"
             title="Compose"
-            onClick={() => setModalOpen(true)}
+            onClick={() => { setShowNewChat(true); setSettingsOpen(false); }}
           >
-            <Pencil size={18} />
+            <MessageSquarePlus size={18} />
           </IconButton>
           <IconButton
-            aria-label="Settings"
+            aria-label="More options"
+            title="More options"
             aria-expanded={settingsOpen}
             aria-haspopup="menu"
             onClick={() => setSettingsOpen((v) => !v)}
           >
-            <Settings2 size={18} />
+            <MoreHorizontal size={20} />
           </IconButton>
         </div>
+        ) : null}
       </header>
 
-      <div className="px-3 py-2">
-        <label className="relative block">
+      {showNewChat ? (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="px-3 py-2">
+            <label className="relative block">
+              <span className="sr-only">Search by name, username, or number</span>
+              <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-fg-muted)]" size={16} aria-hidden />
+              <input
+                ref={newChatSearchRef}
+                type="search"
+                placeholder={searchMode === "username" ? "Search by username" : searchMode === "phone" ? "Search by phone number" : "Name, username, or number"}
+                value={newChatInput}
+                onChange={(e) => setNewChatInput(e.target.value)}
+                className="w-full rounded-lg border bg-[var(--color-bg-secondary)] py-2.5 pl-10 pr-3 text-sm text-[var(--color-fg-primary)] outline-none placeholder:text-[var(--color-fg-muted)] focus:ring-2 focus:ring-[var(--color-accent)]"
+                style={{ borderColor: "var(--color-border-subtle)" }}
+              />
+            </label>
+          </div>
+          <ul className="min-h-0 flex-1 overflow-y-auto px-2 pb-3" style={{ scrollbarWidth: "thin" }}>
+            {newChatSearch ? (
+              newChatQuery.isLoading ? <li className="px-3 py-6 text-center text-sm text-[var(--color-fg-muted)]">Searching…</li> :
+              newChatQuery.error ? <li className="px-3 py-6 text-center text-sm" style={{ color: "var(--color-status-error)" }}>Couldn't search users.</li> :
+              (newChatQuery.data ?? []).length ? (newChatQuery.data ?? []).map((user) => (
+                <li key={user.id}><NewChatUserRow user={user} disabled={addContactMutation.isPending} onClick={() => {
+                  const existing = conversations.find((conv) => conv.type === "direct" && conv.participants.some((person) => person.id === user.id));
+                  if (existing) { setSelected(existing.id); setShowNewChat(false); }
+                  else if (!user.already_contact) addContactMutation.mutate(user.phone);
+                  else toast.error("This contact has no conversation yet.");
+                }} /></li>
+              )) : <li className="px-3 py-6 text-center text-sm text-[var(--color-fg-muted)]">No matches.</li>
+            ) : (
+              <>
+                <li><NewChatAction icon={<UsersGlyph />} title="New group" onClick={() => { setShowNewChat(false); setGroupModalOpen(true); }} /></li>
+                <li><NewChatAction icon={<AtSign size={21} />} title="Find by username" onClick={() => { setSearchMode("username"); newChatSearchRef.current?.focus(); }} /></li>
+                <li><NewChatAction icon={<Hash size={21} />} title="Find by phone number" onClick={() => { setSearchMode("phone"); newChatSearchRef.current?.focus(); }} /></li>
+                <li className="px-3 pb-1 pt-5 text-sm font-semibold text-[var(--color-fg-secondary)]">Contacts</li>
+                {contactsQuery.isLoading ? <li className="px-3 py-4 text-sm text-[var(--color-fg-muted)]">Loading contacts…</li> :
+                  (contactsQuery.data ?? []).map((contact) => <li key={contact.id}><ContactRow contact={contact} onClick={() => {
+                    const existing = conversations.find((conv) => conv.type === "direct" && conv.participants.some((person) => person.id === contact.contact.id));
+                    if (existing) { setSelected(existing.id); setShowNewChat(false); }
+                    else toast.error("This contact has no conversation yet.");
+                  }} /></li>)}
+              </>
+            )}
+          </ul>
+        </div>
+      ) : <>
+      <div className="flex items-center gap-2 px-3 py-2">
+        <label className="relative block min-w-0 flex-1">
           <span className="sr-only">Search conversations</span>
           <Search
             className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-fg-muted)]"
@@ -169,7 +289,7 @@ export function ConversationListPane() {
           />
           <input
             type="search"
-            placeholder="Search ⌘K"
+            placeholder="Search"
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             ref={searchRef}
@@ -177,6 +297,54 @@ export function ConversationListPane() {
             style={{ borderColor: "var(--color-border-subtle)" }}
           />
         </label>
+        <div className="relative">
+          <IconButton
+            aria-label="Filter chats"
+            title="Filter chats"
+            aria-expanded={filterOpen}
+            aria-haspopup="menu"
+            onClick={() => setFilterOpen((open) => !open)}
+          >
+            <ListFilter size={17} />
+          </IconButton>
+          {filterOpen ? (
+            <div
+              role="menu"
+              aria-label="Filter conversations"
+              className="absolute right-0 top-full z-30 mt-1 w-40 rounded-lg border bg-[var(--color-bg-elevated)] p-1 shadow-lg"
+              style={{ borderColor: "var(--color-border-subtle)" }}
+            >
+              {(
+                [
+                  ["all", "All chats"],
+                  ["unread", "Unread"],
+                  ["groups", "Groups"],
+                  ["direct", "Direct chats"],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={conversationFilter === value}
+                  onClick={() => {
+                    setConversationFilter(value);
+                    setFilterOpen(false);
+                  }}
+                  className="flex w-full items-center rounded-md px-2.5 py-2 text-left text-sm text-[var(--color-fg-primary)] hover:bg-[var(--color-bg-tertiary)]"
+                  style={{
+                    backgroundColor:
+                      conversationFilter === value
+                        ? "var(--color-bg-tertiary)"
+                        : undefined,
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
       </div>
 
       <ul
@@ -192,10 +360,16 @@ export function ConversationListPane() {
           </li>
         ) : filtered.length === 0 ? (
           <li>
-            {debouncedSearch && conversations.length > 0 ? (
-              <SearchEmpty onClear={() => setSearchInput("")} />
+            {(debouncedSearch || conversationFilter !== "all") &&
+            conversations.length > 0 ? (
+              <SearchEmpty
+                onClear={() => {
+                  setSearchInput("");
+                  setConversationFilter("all");
+                }}
+              />
             ) : (
-              <ListEmpty onCompose={() => setModalOpen(true)} />
+              <ListEmpty onCompose={() => setShowNewChat(true)} />
             )}
           </li>
         ) : (
@@ -210,11 +384,8 @@ export function ConversationListPane() {
           ))
         )}
       </ul>
+      </>}
 
-      <AddContactModal
-        open={modalOpen}
-        onClose={() => setModalOpen(false)}
-      />
       <NewGroupModal
         open={groupModalOpen}
         onClose={() => setGroupModalOpen(false)}
@@ -232,6 +403,29 @@ export function ConversationListPane() {
       />
     </aside>
   );
+}
+
+function NewChatAction({ icon, title, onClick }: { icon: React.ReactNode; title: string; onClick: () => void }) {
+  return <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium text-[var(--color-fg-primary)] transition hover:bg-[var(--color-bg-tertiary)]">
+    <span className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--color-bg-tertiary)] text-[var(--color-fg-secondary)]">{icon}</span>{title}
+  </button>;
+}
+
+function UsersGlyph() { return <Users size={21} />; }
+
+function NewChatUserRow({ user, disabled, onClick }: { user: UserSearchResult; disabled: boolean; onClick: () => void }) {
+  return <button type="button" disabled={disabled} onClick={onClick} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition hover:bg-[var(--color-bg-tertiary)] disabled:opacity-60">
+    <Avatar subject={{ avatar_url: user.avatar_url, display_name: user.display_name ?? user.phone }} />
+    <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-[var(--color-fg-primary)]">{user.display_name ?? user.phone}</span><span className="block truncate text-xs text-[var(--color-fg-muted)]">{user.phone}</span></span>
+    {user.already_contact ? <span className="text-xs text-[var(--color-fg-muted)]">Added</span> : <span className="text-[var(--color-fg-secondary)]"><Plus size={18} /></span>}
+  </button>;
+}
+
+function ContactRow({ contact, onClick }: { contact: Contact; onClick: () => void }) {
+  return <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition hover:bg-[var(--color-bg-tertiary)]">
+    <Avatar subject={{ avatar_url: contact.contact.avatar_url, display_name: contact.nickname ?? contact.contact.display_name ?? contact.contact.phone }} />
+    <span className="truncate text-sm font-medium text-[var(--color-fg-primary)]">{contact.nickname ?? contact.contact.display_name ?? contact.contact.phone}</span>
+  </button>;
 }
 
 function matches(conv: Conversation, q: string): boolean {
@@ -266,7 +460,7 @@ function IconButton({
 
 /**
  * Settings popover. Anchored to the top-right of the pane (the
- * `Settings2` icon button). Each menu item navigates to the
+ * overflow menu button). Each menu item navigates to the
  * corresponding `/settings?section=X` panel — see `app/settings/page.tsx`.
  * Logout opens the confirmation modal.
  *

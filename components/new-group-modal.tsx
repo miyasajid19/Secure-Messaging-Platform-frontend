@@ -14,9 +14,9 @@
  * Spec: @task.md §4 ("New Group modal").
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Search, X } from "lucide-react";
+import { Camera, ImagePlus, Plus, Search, UserCircle2, X } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar } from "./avatar";
 import {
@@ -24,6 +24,9 @@ import {
   createGroup,
   queryKeys,
   searchUsers,
+  setDisappearingTimer,
+  uploadImage,
+  DISAPPEARING_TIMER_OPTIONS,
   type UserSearchResult,
 } from "@/lib/api";
 import { useUiStore } from "@/store/ui";
@@ -51,6 +54,9 @@ export function NewGroupModal({ open, onClose, currentUserId }: Props) {
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
   const [picked, setPicked] = useState<PickedMember[]>([]);
+  const [groupPhoto, setGroupPhoto] = useState<File | null>(null);
+  const [groupPhotoPreview, setGroupPhotoPreview] = useState("");
+  const [disappearingSeconds, setDisappearingSeconds] = useState("");
 
   // Reset on close.
   useEffect(() => {
@@ -59,8 +65,20 @@ export function NewGroupModal({ open, onClose, currentUserId }: Props) {
       setSearch("");
       setDebounced("");
       setPicked([]);
+      setGroupPhoto(null);
+      setDisappearingSeconds("");
     }
   }, [open]);
+
+  useEffect(() => {
+    if (!groupPhoto) {
+      setGroupPhotoPreview("");
+      return;
+    }
+    const previewUrl = URL.createObjectURL(groupPhoto);
+    setGroupPhotoPreview(previewUrl);
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [groupPhoto]);
 
   // Debounce search box.
   useEffect(() => {
@@ -97,7 +115,7 @@ export function NewGroupModal({ open, onClose, currentUserId }: Props) {
   );
 
   const createMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       // Phase 6 spec: "Create button (disabled if no name or <2
       // members — direct = 2 people, group = 2+)". 2+ members = the
       // backend auto-adds the caller as admin, so we send only the
@@ -111,16 +129,28 @@ export function NewGroupModal({ open, onClose, currentUserId }: Props) {
         // caller, but if a future code path slips them in, drop
         // them here rather than ship the bug to the backend.
         .filter((id) => id !== currentUserId);
-      return createGroup({
+      const uploadedPhoto = groupPhoto ? await uploadImage(groupPhoto) : null;
+      const conversation = await createGroup({
         type: "group",
         name: name.trim(),
         member_ids: memberIds,
+        avatar_url: uploadedPhoto?.url,
       });
+      let timerFailed = false;
+      if (disappearingSeconds) {
+        try {
+          await setDisappearingTimer(conversation.id, Number(disappearingSeconds));
+        } catch {
+          timerFailed = true;
+        }
+      }
+      return { conversation, timerFailed };
     },
-    onSuccess: (conversation) => {
+    onSuccess: ({ conversation, timerFailed }) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.conversations });
       setSelected(conversation.id);
       toast.success(`Group "${conversation.name ?? "untitled"}" created`);
+      if (timerFailed) toast.error("Group created, but its disappearing-message timer could not be set");
       onClose();
     },
     onError: (err) => {
@@ -149,6 +179,21 @@ export function NewGroupModal({ open, onClose, currentUserId }: Props) {
     );
   }
 
+  function handlePhotoChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    event.target.value = "";
+    if (!file.type.startsWith("image/") || file.type === "image/svg+xml") {
+      toast.error("Choose a supported image file");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("Group photos must be 5 MB or smaller");
+      return;
+    }
+    setGroupPhoto(file);
+  }
+
   return (
     <div
       role="dialog"
@@ -169,7 +214,7 @@ export function NewGroupModal({ open, onClose, currentUserId }: Props) {
           style={{ borderColor: "var(--color-border-subtle)" }}
         >
           <h2 className="text-base font-semibold text-[var(--color-fg-primary)]">
-            New group
+            Name this group
           </h2>
           <button
             type="button"
@@ -182,19 +227,47 @@ export function NewGroupModal({ open, onClose, currentUserId }: Props) {
         </header>
 
         <div className="p-4">
-          <label className="mb-3 block">
-            <span className="mb-1 block text-xs font-medium text-[var(--color-fg-secondary)]">
-              Group name
-            </span>
+          <div className="mb-4 flex flex-col items-center">
+            <div className="relative mb-4">
+              <div className="flex h-28 w-28 items-center justify-center overflow-hidden rounded-full border bg-[var(--color-bg-secondary)]" style={{ borderColor: "var(--color-border-subtle)" }}>
+                {groupPhotoPreview ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={groupPhotoPreview} alt="Group photo preview" className="h-full w-full object-cover" />
+                ) : <UserCircle2 size={58} className="text-[var(--color-fg-muted)]" aria-hidden />}
+              </div>
+              <label htmlFor="new-group-photo" title="Add group photo" className="absolute bottom-0 right-0 flex h-9 w-9 cursor-pointer items-center justify-center rounded-full border bg-[var(--color-bg-primary)] text-[var(--color-fg-secondary)] shadow-sm hover:bg-[var(--color-bg-tertiary)]" style={{ borderColor: "var(--color-border-subtle)" }}>
+                <Camera size={17} aria-hidden />
+              </label>
+            </div>
+            <input
+              id="new-group-photo"
+              type="file"
+              accept="image/*"
+              onChange={handlePhotoChange}
+              disabled={createMutation.isPending}
+              className="sr-only"
+              aria-label="Add group photo"
+            />
+            {groupPhoto ? <span className="mb-2 max-w-full truncate text-xs text-[var(--color-fg-muted)]">{groupPhoto.name}</span> : null}
+            <label className="block w-full">
+              <span className="sr-only">Group name</span>
             <input
               type="text"
-              placeholder="e.g. Team Phoenix"
+              placeholder="Group name (required)"
               value={name}
               maxLength={64}
               onChange={(e) => setName(e.target.value)}
-              className="w-full rounded-lg border bg-[var(--color-bg-secondary)] px-3 py-2 text-sm text-[var(--color-fg-primary)] outline-none placeholder:text-[var(--color-fg-muted)] focus:ring-2 focus:ring-[var(--color-accent)]"
+              className="w-full rounded-lg border bg-[var(--color-bg-secondary)] px-3 py-3 text-sm text-[var(--color-fg-primary)] outline-none placeholder:text-[var(--color-fg-muted)] focus:ring-2 focus:ring-[var(--color-accent)]"
               style={{ borderColor: "var(--color-border-subtle)" }}
             />
+          </label>
+          </div>
+
+          <label className="mb-3 flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5 text-sm text-[var(--color-fg-primary)]" style={{ borderColor: "var(--color-border-subtle)" }}>
+            <span className="flex items-center gap-2"><span className="text-[var(--color-fg-secondary)]"><ImagePlus size={16} /></span>Disappearing messages</span>
+            <select value={disappearingSeconds} onChange={(event) => setDisappearingSeconds(event.target.value)} className="rounded-md bg-[var(--color-bg-secondary)] px-2 py-1.5 text-sm text-[var(--color-fg-primary)] outline-none">
+              {DISAPPEARING_TIMER_OPTIONS.map((option) => <option key={option.label} value={option.value ?? ""}>{option.label}</option>)}
+            </select>
           </label>
 
           <label className="relative mb-3 block">

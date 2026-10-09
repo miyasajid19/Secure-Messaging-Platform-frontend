@@ -17,7 +17,7 @@
  *   - "Delete group" (admin only, with confirm)
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ChangeEvent } from "react";
 import {
   useMutation,
   useQuery,
@@ -25,6 +25,7 @@ import {
 } from "@tanstack/react-query";
 import {
   LogOut,
+  ImagePlus,
   Search,
   Shield,
   Timer,
@@ -36,6 +37,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar } from "./avatar";
+import { ConversationAvatar } from "./conversation-avatar";
 import {
   ApiError,
   addMember,
@@ -45,6 +47,8 @@ import {
   removeMember,
   searchUsers,
   setDisappearingTimer,
+  updateGroupAvatar,
+  uploadImage,
   DISAPPEARING_TIMER_OPTIONS,
   type Conversation,
   type User,
@@ -78,6 +82,20 @@ export function GroupInfoModal({
   }, [open, conversation.name]);
 
   const [adding, setAdding] = useState(false);
+  const [groupPhoto, setGroupPhoto] = useState<File | null>(null);
+  const [groupPhotoPreview, setGroupPhotoPreview] = useState("");
+  useEffect(() => {
+    if (!open) setGroupPhoto(null);
+  }, [open]);
+  useEffect(() => {
+    if (!groupPhoto) {
+      setGroupPhotoPreview("");
+      return;
+    }
+    const previewUrl = URL.createObjectURL(groupPhoto);
+    setGroupPhotoPreview(previewUrl);
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [groupPhoto]);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [addSearch, setAddSearch] = useState("");
   const [debouncedAddSearch, setDebouncedAddSearch] = useState("");
@@ -112,6 +130,29 @@ export function GroupInfoModal({
 
   const refresh = () =>
     void queryClient.invalidateQueries({ queryKey: queryKeys.conversations });
+
+  const groupPhotoMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const uploaded = await uploadImage(file);
+      return updateGroupAvatar(conversation.id, uploaded.url);
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData<Conversation[]>(queryKeys.conversations, (items) =>
+        items?.map((item) =>
+          item.id === conversation.id
+            ? { ...item, avatar_url: data.avatar_url }
+            : item,
+        ),
+      );
+      setGroupPhoto(null);
+      toast.success("Group photo updated");
+      refresh();
+    },
+    onError: (err) => {
+      const msg = err instanceof ApiError ? err.message : "Couldn't update group photo";
+      toast.error(msg);
+    },
+  });
 
   const timerMutation = useMutation({
     mutationFn: (seconds: number | null) =>
@@ -176,6 +217,21 @@ export function GroupInfoModal({
     },
   });
 
+  function handleGroupPhotoChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    event.target.value = "";
+    if (!file.type.startsWith("image/") || file.type === "image/svg+xml") {
+      toast.error("Choose a supported image file");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("Group photos must be 5 MB or smaller");
+      return;
+    }
+    setGroupPhoto(file);
+  }
+
   const deleteMutation = useMutation({
     mutationFn: () => deleteGroup(conversation.id),
     onSuccess: () => {
@@ -224,6 +280,79 @@ export function GroupInfoModal({
         </header>
 
         <div className="overflow-y-auto p-4">
+          {conversation.type === "group" ? (
+            <section
+              className="mb-4 flex items-center gap-3 rounded-xl border p-3"
+              style={{ borderColor: "var(--color-border-subtle)" }}
+            >
+              {groupPhotoPreview ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={groupPhotoPreview}
+                  alt="Group photo preview"
+                  className="h-14 w-14 shrink-0 rounded-full object-cover"
+                />
+              ) : (
+                <ConversationAvatar
+                  avatarUrl={conversation.avatar_url}
+                  displayName={conversation.name ?? "Group"}
+                  isGroup
+                  size={56}
+                />
+              )}
+              <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                <span className="text-sm font-medium text-[var(--color-fg-primary)]">
+                  Group photo
+                </span>
+                {isAdmin ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label
+                      htmlFor={`group-photo-${conversation.id}`}
+                      className="inline-flex w-fit cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs text-[var(--color-fg-primary)] hover:bg-[var(--color-bg-tertiary)]"
+                      style={{ borderColor: "var(--color-border-subtle)" }}
+                    >
+                      <ImagePlus size={13} aria-hidden />
+                      {conversation.avatar_url?.includes("api.dicebear.com")
+                        ? "Add photo"
+                        : "Change photo"}
+                    </label>
+                    <input
+                      id={`group-photo-${conversation.id}`}
+                      type="file"
+                      accept="image/*"
+                      onChange={handleGroupPhotoChange}
+                      disabled={groupPhotoMutation.isPending}
+                      className="sr-only"
+                      aria-label="Choose group photo"
+                    />
+                    {groupPhoto ? (
+                      <button
+                        type="button"
+                        onClick={() => groupPhotoMutation.mutate(groupPhoto)}
+                        disabled={groupPhotoMutation.isPending}
+                        className="rounded-lg px-3 py-1.5 text-xs font-semibold disabled:opacity-50"
+                        style={{
+                          backgroundColor: "var(--color-accent)",
+                          color: "var(--color-accent-fg)",
+                        }}
+                      >
+                        {groupPhotoMutation.isPending ? "Saving…" : "Save photo"}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : (
+                  <span className="text-xs text-[var(--color-fg-muted)]">
+                    Only group admins can change the photo.
+                  </span>
+                )}
+                {groupPhoto ? (
+                  <span className="truncate text-xs text-[var(--color-fg-muted)]">
+                    {groupPhoto.name}
+                  </span>
+                ) : null}
+              </div>
+            </section>
+          ) : null}
           <section className="mb-4 rounded-xl border p-3" style={{ borderColor: "var(--color-border-subtle)" }}>
             <div className="flex items-center gap-2 text-sm font-medium text-[var(--color-fg-primary)]">
               <Timer size={15} /> Disappearing messages

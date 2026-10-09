@@ -33,6 +33,7 @@ import { toast } from "sonner";
 import {
   ApiError,
   sendMessage,
+  uploadMessageAttachments,
   type Message,
   type User,
 } from "@/lib/api";
@@ -40,6 +41,7 @@ import { getQueryClient, queryKeys } from "@/lib/api";
 import { send as realtimeSend } from "@/lib/realtime";
 import { useRealtimeStore } from "@/store/realtime";
 import { useReplyStore } from "@/store/reply";
+import { useDraftStore } from "@/store/drafts";
 
 interface Props {
   conversationId: number | null;
@@ -55,7 +57,12 @@ const TYPING_IDLE_MS = 6_000;
 export function Composer({ conversationId, currentUser, onSend }: Props) {
   const [value, setValue] = useState("");
   const [composing, setComposing] = useState(false);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [uploading, setUploading] = useState(false);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const setDraft = useDraftStore((s) => s.setDraft);
+  const activeConversationRef = useRef<number | null>(null);
   // wsReady gates sends per Phase 6 §1: we never POST a message
   // before the WS has finished registering, otherwise the sender
   // won't get the broadcast and the bubble appears nowhere.
@@ -74,11 +81,22 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
     ta.style.height = `${next}px`;
   }, [value]);
 
-  // Reset on conversation change.
+  // Keep unsent text with its conversation and restore it when returning.
   useEffect(() => {
-    setValue("");
+    const previousConversationId = activeConversationRef.current;
+    if (previousConversationId === conversationId) return;
+    if (previousConversationId !== null) {
+      setDraft(previousConversationId, value);
+    }
+    activeConversationRef.current = conversationId;
+    setValue(
+      conversationId === null
+        ? ""
+        : useDraftStore.getState().drafts[conversationId] ?? "",
+    );
+    setSelectedFiles([]);
     taRef.current?.focus();
-  }, [conversationId]);
+  }, [conversationId, setDraft, value]);
 
   // Typing indicator state. We track whether we've already fired a
   // `typing.start` for this composer instance so debounce doesn't
@@ -158,6 +176,7 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
 
   function handleChange(text: string) {
     setValue(text);
+    if (conversationId !== null) setDraft(conversationId, text);
     if (text.length > 0) noteTyping();
     else if (typingActiveRef.current && conversationId != null) {
       // Empty box → announce stop immediately, no debounce.
@@ -169,6 +188,9 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
 
   function reset() {
     setValue("");
+    if (conversationId !== null) {
+      useDraftStore.getState().clearDraft(conversationId);
+    }
     const ta = taRef.current;
     if (ta) {
       ta.style.height = `${LINE_PX}px`;
@@ -186,7 +208,9 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
     if (!conversationId) return;
     if (!currentUser) return;
     const trimmed = value.trim();
-    if (!trimmed) return;
+    const filesToSend = selectedFiles;
+    if (!trimmed && filesToSend.length === 0) return;
+    if (uploading) return;
 
     // Phase 8.1 — read reply state right before the POST so we
     // capture the value and can clear it after a successful send.
@@ -200,8 +224,8 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
       conversation_id: conversationId,
       sender_id: currentUser.id,
       sender: currentUser,
-      content: trimmed,
-      type: "text",
+      content: trimmed || "Sending attachment…",
+      type: filesToSend.some((file) => file.type.startsWith("image/")) ? "image" : "text",
       created_at: new Date().toISOString(),
       parent_id: parentIdForSend,
       attachments: [],
@@ -219,13 +243,18 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
     );
     void onSend; // reserved for future shortcuts; not used by the cache path
 
-    reset();
+    if (filesToSend.length === 0) reset();
+    setUploading(filesToSend.length > 0);
 
     try {
+      const attachments = filesToSend.length
+        ? await uploadMessageAttachments(conversationId, filesToSend)
+        : [];
       const real = await sendMessage(conversationId, {
         content: trimmed,
-        type: "text",
+        type: attachments.some((attachment) => attachment.mime.startsWith("image/")) ? "image" : "text",
         parent_id: parentIdForSend,
+        attachments,
       });
       // Reply state is cleared on a successful send.
       if (parentIdForSend) useReplyStore.getState().clear();
@@ -250,15 +279,27 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
           return [...without, real];
         },
       );
+      if (filesToSend.length > 0) {
+        reset();
+        setSelectedFiles([]);
+      }
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : "Couldn't send message";
+      if (filesToSend.length > 0) {
+        qc.setQueryData<Message[]>(
+          queryKeys.messages(conversationId),
+          (prev) => prev?.filter((message) => message.created_at !== optimistic.created_at),
+        );
+        toast.error(msg);
+        return;
+      }
       // Mark the bubble as failed so the user can retry.
       qc.setQueryData<Message[]>(
         queryKeys.messages(conversationId),
         (prev) => {
           if (!prev) return prev;
           return prev.map((m) =>
-            m.content === trimmed && m.sender_id === currentUser.id &&
+            m.sender_id === currentUser.id &&
             m.created_at === optimistic.created_at
               ? { ...m, status: "failed" as const }
               : m,
@@ -266,7 +307,34 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
         },
       );
       toast.error(msg);
+    } finally {
+      setUploading(false);
     }
+  }
+
+  function addFiles(fileList: FileList | null) {
+    if (!fileList) return;
+    const incoming = Array.from(fileList);
+    const accepted = incoming.filter((file) => {
+      if (file.size === 0 || file.size > 25 * 1024 * 1024) {
+        toast.error(`${file.name} must be between 1 byte and 25 MB`);
+        return false;
+      }
+      return true;
+    });
+    setSelectedFiles((current) => {
+      const available = Math.max(0, 10 - current.length);
+      if (accepted.length > available) {
+        toast.error("You can attach up to 10 files per message");
+      }
+      const next = [...current, ...accepted.slice(0, available)];
+      if (next.reduce((total, file) => total + file.size, 0) > 50 * 1024 * 1024) {
+        toast.error("Attachments must total 50 MB or less");
+        return current;
+      }
+      return next;
+    });
+    if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -284,12 +352,12 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
     }
   }
 
-  const empty = value.trim().length === 0;
-  const disabled = !conversationId || empty || !currentUser || !wsReady;
-  const sendAria = `Send${disabled ? " (disabled)" : ""}`;
+  const empty = value.trim().length === 0 && selectedFiles.length === 0;
+  const disabled = !conversationId || empty || !currentUser || !wsReady || uploading;
+  const sendAria = uploading ? "Uploading attachments" : `Send${disabled ? " (disabled)" : ""}`;
 
   function placeholderFeature(name: string) {
-    return () => toast.info(`${name} — Phase 4+`, { duration: 2000 });
+    return () => toast.info(`${name} — coming soon`, { duration: 2000 });
   }
 
   return (
@@ -331,11 +399,30 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
           </button>
         </div>
       ) : null}
+      {selectedFiles.length > 0 ? (
+        <div className="flex flex-wrap gap-2 px-3 pt-2" aria-label="Selected attachments">
+          {selectedFiles.map((file, index) => (
+            <span key={`${file.name}-${file.lastModified}-${index}`} className="flex max-w-full items-center gap-1 rounded-lg border px-2 py-1 text-xs text-[var(--color-fg-secondary)]" style={{ borderColor: "var(--color-border-subtle)" }}>
+              <span className="max-w-48 truncate">{file.name}</span>
+              <button type="button" aria-label={`Remove ${file.name}`} onClick={() => setSelectedFiles((current) => current.filter((_, i) => i !== index))} className="rounded p-0.5 hover:bg-[var(--color-bg-tertiary)]"><X size={12} /></button>
+            </span>
+          ))}
+        </div>
+      ) : null}
       <div className="flex items-end gap-2 px-3 py-3">
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="sr-only"
+        aria-label="Choose files to attach"
+        onChange={(event) => addFiles(event.currentTarget.files)}
+      />
       <button
         type="button"
-        onClick={placeholderFeature("Attachments")}
+        onClick={() => fileInputRef.current?.click()}
         aria-label="Add attachment"
+        disabled={!conversationId || uploading}
         className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-tertiary)]"
       >
         <Paperclip size={18} />
@@ -367,7 +454,7 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
         onKeyDown={onKeyDown}
         onCompositionStart={() => setComposing(true)}
         onCompositionEnd={() => setComposing(false)}
-        disabled={!conversationId}
+        disabled={!conversationId || uploading}
         className="min-h-9 flex-1 resize-none rounded-2xl border bg-[var(--color-bg-primary)] px-3 py-2 text-sm text-[var(--color-fg-primary)] outline-none focus:ring-2 focus:ring-[var(--color-accent)] disabled:opacity-60"
         style={{
           borderColor: "var(--color-border-subtle)",
@@ -386,7 +473,7 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
           color: "var(--color-accent-fg)",
         }}
       >
-        {wsReady ? (
+        {wsReady && !uploading ? (
           <Send size={16} />
         ) : (
           <Loader2

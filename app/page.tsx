@@ -41,6 +41,7 @@ export default function HomePage() {
   // Reset mobile focus onto the list whenever a conversation deselects
   // (e.g. user logs out, then back in).
   const [mobileFocus, setMobileFocus] = useState<"list" | "chat">("list");
+  const [railVisible, setRailVisible] = useState(true);
   useEffect(() => {
     setMobileFocus("list");
   }, [hydrated && isAuthed]);
@@ -113,13 +114,16 @@ export default function HomePage() {
       className="flex h-screen w-screen overflow-hidden"
       style={{ backgroundColor: "var(--color-bg-primary)" }}
     >
-      <LeftRail />
+      {railVisible ? <LeftRail onHide={() => setRailVisible(false)} /> : null}
 
       {/* Mobile visibility: at < 1024px, only the focused pane renders.
           Desktop: both always render side-by-side. */}
       {isCompact ? (
         mobileFocus === "list" ? (
-          <ConversationListPane />
+          <ConversationListPane
+            navigationHidden={!railVisible}
+            onShowNavigation={() => setRailVisible(true)}
+          />
         ) : (
           <ChatPane
             showBackButton
@@ -128,7 +132,10 @@ export default function HomePage() {
         )
       ) : (
         <>
-          <ConversationListPane />
+          <ConversationListPane
+            navigationHidden={!railVisible}
+            onShowNavigation={() => setRailVisible(true)}
+          />
           <ChatPane />
         </>
       )}

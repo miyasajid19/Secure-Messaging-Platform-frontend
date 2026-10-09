@@ -59,6 +59,8 @@ export interface Attachment {
   size_bytes: number;
 }
 
+export type UploadedAttachment = Pick<Attachment, "url" | "mime" | "size_bytes">;
+
 export type MessageType = "text" | "image" | "system";
 
 // Phase 8.4 — allowed disappearing-message timer values. The
@@ -135,9 +137,7 @@ export interface Conversation {
   last_message: MessagePreview | null;
   last_message_at: string | null;
   unread_count: number;
-  /** Backend returns either the other party's avatar (direct) or a
-   *  generated initials avatar (group). Optional — older seeded rows
-   *  may be missing this field. */
+  /** Direct participant photo, or configured/fallback group photo. */
   avatar_url: string | null;
   /** Phase 6: `true` for groups (admin-allowed), `false` for directs. */
   members_can_be_added?: boolean;
@@ -255,6 +255,30 @@ export const updateProfile = (patch: ProfilePatch) =>
     method: "PATCH",
     body: patch,
   });
+
+/** Upload an image through the authenticated backend/ImageKit route. */
+export async function uploadImage(file: File): Promise<{ url: string }> {
+  const form = new FormData();
+  form.append("file", file);
+  const headers = new Headers({ accept: "application/json" });
+  const token = useAuthStore.getState().token;
+  if (token) headers.set("authorization", `Bearer ${token}`);
+  const response = await fetch(`${env.apiUrl}/auth/upload-image`, {
+    method: "POST",
+    headers,
+    body: form,
+  });
+  const text = await response.text();
+  const data: unknown = text ? JSON.parse(text) : null;
+  if (!response.ok) {
+    const detail =
+      data && typeof data === "object" && "detail" in data
+        ? (data as { detail: string }).detail
+        : response.statusText || "Image upload failed";
+    throw new ApiError(detail, response.status);
+  }
+  return data as { url: string };
+}
 
 /**
  * Best-effort call to the backend's logout endpoint (closes WS +
@@ -392,6 +416,7 @@ export interface CreateGroupBody {
   type: "group";
   name: string;
   member_ids: number[];
+  avatar_url?: string;
 }
 export interface CreateGroupResponse {
   conversation: Conversation;
@@ -401,6 +426,13 @@ export const createGroup = (body: CreateGroupBody) =>
     method: "POST",
     body,
   });
+
+/** `PATCH /conversations/{id}/avatar` — admin only. */
+export const updateGroupAvatar = (conversationId: number, avatarUrl: string | null) =>
+  apiFetch<{ avatar_url: string | null }>(
+    `/conversations/${conversationId}/avatar`,
+    { method: "PATCH", body: { avatar_url: avatarUrl } },
+  );
 
 /** `POST /conversations/{id}/members` — admin only; adds a user. */
 export interface AddMemberResponse {
@@ -440,6 +472,7 @@ export interface SendMessageBody {
   type: MessageType;
   /** Phase 8 reply; accepted but ignored server-side in Phase 5. */
   parent_id?: number | null;
+  attachments?: UploadedAttachment[];
 }
 
 export const sendMessage = (
@@ -450,6 +483,29 @@ export const sendMessage = (
     method: "POST",
     body,
   });
+
+/** Upload files through the authenticated backend; ImageKit credentials stay server-side. */
+export async function uploadMessageAttachments(conversationId: number, files: File[]) {
+  const form = new FormData();
+  for (const file of files) form.append("files", file);
+  const headers = new Headers({ accept: "application/json" });
+  const token = useAuthStore.getState().token;
+  if (token) headers.set("authorization", `Bearer ${token}`);
+  const response = await fetch(`${env.apiUrl}/conversations/${conversationId}/attachments`, {
+    method: "POST",
+    headers,
+    body: form,
+  });
+  const text = await response.text();
+  const data: unknown = text ? JSON.parse(text) : null;
+  if (!response.ok) {
+    const detail = data && typeof data === "object" && "detail" in data
+      ? (data as { detail: string }).detail
+      : response.statusText || "Upload failed";
+    throw new ApiError(detail, response.status);
+  }
+  return data as UploadedAttachment[];
+}
 
 /** `POST /conversations/{id}/read` — marks messages up to `message_id` read
  *  for the current user. */

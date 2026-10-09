@@ -22,13 +22,18 @@
 
 import {
   AlertCircle,
+  ChevronLeft,
+  ChevronRight,
   Check,
   CheckCheck,
   Circle,
   CornerUpLeft,
+  Download,
+  FileText,
   Loader2,
   SmilePlus,
   Timer,
+  X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Avatar } from "./avatar";
@@ -78,6 +83,18 @@ export function MessageBubble({
   recipientOnline = false,
 }: Props) {
   const time = formatBubbleTime(message.created_at);
+  const attachments = message.attachments ?? [];
+  const imageAttachments = attachments.filter((attachment) =>
+    attachment.mime.startsWith("image/"),
+  );
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const isImageGallery =
+    attachments.length > 1 &&
+    attachments.every((attachment) => attachment.mime.startsWith("image/"));
+  const isImageOnly =
+    !message.content.trim() &&
+    attachments.length > 0 &&
+    attachments.every((attachment) => attachment.mime.startsWith("image/"));
 
   // Phase 8.4 — disappearing-message timer. Re-derive the remaining
   // seconds every tick and force a re-render so the chip counts
@@ -104,6 +121,32 @@ export function MessageBubble({
     return () => window.clearInterval(handle);
   }, [message.created_at, message.disappear_after_seconds]);
   const isDisappearing = message.disappear_after_seconds != null;
+  useEffect(() => {
+    if (lightboxIndex === null) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setLightboxIndex(null);
+      if (event.key === "ArrowLeft") {
+        setLightboxIndex((index) =>
+          index === null
+            ? null
+            : (index - 1 + imageAttachments.length) % imageAttachments.length,
+        );
+      }
+      if (event.key === "ArrowRight") {
+        setLightboxIndex((index) =>
+          index === null ? null : (index + 1) % imageAttachments.length,
+        );
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [lightboxIndex, imageAttachments.length]);
   const expiresAtMs =
     isDisappearing
     ? parseMessageTimestamp(message.created_at) +
@@ -140,7 +183,9 @@ export function MessageBubble({
       conversation_id: message.conversation_id,
       sender_name:
         message.sender.display_name ?? message.sender.phone ?? "Unknown",
-      content: parent?.content ?? message.content.slice(0, 120),
+      content:
+        parent?.content ||
+        (parent?.attachments?.length ? "📎 Attachment" : message.content.slice(0, 120)),
       type: message.type,
     });
   }
@@ -153,16 +198,14 @@ export function MessageBubble({
   const reactions = message.reactions ?? [];
   const [pickerOpen, setPickerOpen] = useState(false);
 
-  function userHasReacted(emoji: string): boolean {
-    if (currentUserId == null) return false;
-    const group = reactions.find((g) => g.emoji === emoji);
-    return group?.users.some((u) => u.id === currentUserId) ?? false;
-  }
-
   function toggleReaction(emoji: string) {
     if (currentUserId == null) return;
     const me = currentUserId;
-    const hasMine = userHasReacted(emoji);
+    const userReactions = reactions.filter((group) =>
+      group.users.some((user) => user.id === me),
+    );
+    const hasMine = userReactions.some((group) => group.emoji === emoji);
+    const previousReactions = reactions;
     // Optimistic write — update the message's `reactions` array
     // directly via the cache so the badge flips immediately.
     const qc = getQueryClient();
@@ -171,27 +214,20 @@ export function MessageBubble({
       if (!prev) return prev;
       return prev.map((m) => {
         if (m.id !== message.id) return m;
-        const next = (m.reactions ?? []).slice();
-        const idx = next.findIndex((g) => g.emoji === emoji);
-        if (idx === -1) {
-          next.push({
-            emoji,
-            count: 1,
-            users: [
-              { id: me, display_name: null, avatar_url: null },
-            ],
-          });
-        } else {
-          const g = next[idx];
-          if (hasMine) {
-            // Remove this user
-            const users = g.users.filter((u) => u.id !== me);
-            if (users.length === 0) {
-              next.splice(idx, 1);
-            } else {
-              next[idx] = { ...g, count: g.count - 1, users };
-            }
+        const next = (m.reactions ?? []).map((group) => {
+          const users = group.users.filter((user) => user.id !== me);
+          return { ...group, users, count: users.length };
+        }).filter((group) => group.count > 0);
+        if (!hasMine) {
+          const idx = next.findIndex((g) => g.emoji === emoji);
+          if (idx === -1) {
+            next.push({
+              emoji,
+              count: 1,
+              users: [{ id: me, display_name: null, avatar_url: null }],
+            });
           } else {
+            const g = next[idx];
             next[idx] = {
               ...g,
               count: g.count + 1,
@@ -206,16 +242,19 @@ export function MessageBubble({
       });
     });
     setPickerOpen(false);
-    // Fire the actual API call. The WS event reconciles any drift.
-    const promise = hasMine
-      ? removeReaction(message.id, emoji)
-      : addReaction(message.id, emoji);
-    promise
-      .then((server) => {
+    // The API replaces the user's existing emoji on POST; DELETE toggles
+    // the selected emoji off. Its WebSocket event reconciles other clients.
+    void (async () => {
+      try {
+        if (hasMine) {
+          await removeReaction(message.id, emoji);
+          return;
+        }
+        const server = await addReaction(message.id, emoji);
         // POST returns the canonical ReactionGroup — use it to replace
         // the optimistic row (in case the server computed a different
         // count, e.g. another user reacted concurrently).
-        if (server && !hasMine) {
+        if (server) {
           qc.setQueryData<Message[]>(queryKeys.messages(cid), (prev) => {
             if (!prev) return prev;
             return prev.map((m) => {
@@ -228,44 +267,18 @@ export function MessageBubble({
             });
           });
         }
-      })
-      .catch((err) => {
+      } catch (err) {
         // 409 = "you already reacted" — treat as a no-op. The next
         // WS event or a follow-up refetch will reconcile.
         if (err instanceof ApiError && err.status === 409) return;
-        // Roll back the optimistic write on hard errors and toast.
+        // Restore the previous state if the server rejected the change.
         qc.setQueryData<Message[]>(queryKeys.messages(cid), (prev) => {
           if (!prev) return prev;
-          return prev.map((m) => {
-            if (m.id !== message.id) return m;
-            const next = (m.reactions ?? []).slice();
-            const idx = next.findIndex((g) => g.emoji === emoji);
-            if (idx === -1) return m;
-            const g = next[idx];
-            // Reverse the optimistic flip:
-            if (hasMine) {
-              const users = g.users.filter((u) => u.id !== me);
-              if (users.length === 0) {
-                next.splice(idx, 1);
-              } else {
-                next[idx] = { ...g, count: g.count - 1, users };
-              }
-            } else {
-              const wasMine = g.users.some((u) => u.id === me);
-              if (wasMine) {
-                const users = g.users.filter((u) => u.id !== me);
-                if (users.length === 0) {
-                  next.splice(idx, 1);
-                } else {
-                  next[idx] = { ...g, count: g.count - 1, users };
-                }
-              }
-            }
-            return { ...m, reactions: next };
-          });
+          return prev.map((m) => m.id === message.id ? { ...m, reactions: previousReactions } : m);
         });
         toast.error("Couldn't add reaction — try again.");
-      });
+      }
+    })();
   }
 
   return (
@@ -354,11 +367,13 @@ export function MessageBubble({
         ) : null}
 
         <div
-          className="flex w-fit min-w-0 max-w-full flex-col gap-1 px-3 py-2 shadow-sm"
+          className={`flex w-fit min-w-0 max-w-full flex-col gap-1 ${
+            isImageOnly ? "" : "px-3 py-2 shadow-sm"
+          }`}
           style={{
-            backgroundColor: bubbleBg,
+            backgroundColor: isImageOnly ? "transparent" : bubbleBg,
             color: bubbleFg,
-            borderRadius: 16,
+            borderRadius: isImageOnly ? 0 : 16,
             ...radiusStyle,
             ...(isDisappearing
               ? {
@@ -368,11 +383,64 @@ export function MessageBubble({
                   transition: "opacity 250ms ease",
                 }
               : {}),
+            ...(isImageOnly ? { boxShadow: "none", outline: "none" } : {}),
           }}
         >
-          <span className="whitespace-pre-wrap break-words text-sm leading-snug">
-            {message.content}
-          </span>
+          {message.content ? (
+            <span className="whitespace-pre-wrap break-words text-sm leading-snug">
+              {message.content}
+            </span>
+          ) : null}
+          <div
+            className={
+              isImageGallery
+                ? `grid w-[min(72vw,20rem)] max-w-full gap-1 ${
+                    attachments.length > 4 ? "grid-cols-3" : "grid-cols-2"
+                  }`
+                : "contents"
+            }
+          >
+            {attachments.map((attachment) => {
+              const filename = attachmentName(attachment.url);
+              const image = attachment.mime.startsWith("image/");
+              return image ? (
+                <a
+                  key={attachment.id}
+                href={attachment.url}
+                onClick={(event) => {
+                  event.preventDefault();
+                  setLightboxIndex(
+                    imageAttachments.findIndex((image) => image.id === attachment.id),
+                  );
+                }}
+                aria-label={`Open image ${filename}`}
+                  className={`block overflow-hidden rounded-lg ${
+                    isImageGallery ? "aspect-square min-w-0" : ""
+                  }`}
+                >
+                  {/* ImageKit returns arbitrary CDN URLs, so use a native image element. */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={attachment.url}
+                    alt={filename}
+                    loading="lazy"
+                    className={`rounded-lg ${
+                      isImageGallery
+                        ? "h-full w-full object-cover"
+                        : "max-h-80 max-w-full object-contain"
+                    }`}
+                  />
+                </a>
+              ) : (
+                <a key={attachment.id} href={attachment.url} target="_blank" rel="noreferrer" download={filename} className="flex min-w-48 max-w-full items-center gap-2 rounded-lg bg-black/10 px-2.5 py-2 text-sm hover:bg-black/15">
+                  <FileText size={18} className="shrink-0" aria-hidden />
+                  <span className="min-w-0 flex-1 truncate">{filename}</span>
+                  <span className="shrink-0 text-xs opacity-70">{formatFileSize(attachment.size_bytes)}</span>
+                  <Download size={14} className="shrink-0" aria-hidden />
+                </a>
+              );
+            })}
+          </div>
         </div>
         <div
           className={`flex items-center gap-1 px-1 ${
@@ -413,6 +481,100 @@ export function MessageBubble({
           />
         ) : null}
       </div>
+      {lightboxIndex !== null && imageAttachments[lightboxIndex] ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Image viewer"
+          className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black/90 p-4 backdrop-blur-sm"
+          onClick={() => setLightboxIndex(null)}
+        >
+          <div className="absolute right-4 top-4 z-10 flex items-center gap-2">
+            <a
+              href={imageAttachments[lightboxIndex].url}
+              download={attachmentName(imageAttachments[lightboxIndex].url)}
+              onClick={(event) => event.stopPropagation()}
+              aria-label="Download image"
+              title="Download"
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-black/45 text-white transition hover:bg-black/70"
+            >
+              <Download size={19} aria-hidden />
+            </a>
+            <button
+              type="button"
+              onClick={() => setLightboxIndex(null)}
+              aria-label="Close image viewer"
+              title="Close"
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-black/45 text-white transition hover:bg-black/70"
+            >
+              <X size={21} aria-hidden />
+            </button>
+          </div>
+
+          {imageAttachments.length > 1 ? (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                setLightboxIndex(
+                  (lightboxIndex - 1 + imageAttachments.length) % imageAttachments.length,
+                );
+              }}
+              aria-label="Previous image"
+              className="absolute left-4 top-1/2 z-10 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white transition hover:bg-black/70"
+            >
+              <ChevronLeft size={25} aria-hidden />
+            </button>
+          ) : null}
+
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={imageAttachments[lightboxIndex].url}
+            alt={attachmentName(imageAttachments[lightboxIndex].url)}
+            onClick={(event) => event.stopPropagation()}
+            className="max-h-[calc(100vh-7rem)] max-w-[min(92vw,84rem)] select-none object-contain"
+          />
+
+          {imageAttachments.length > 1 ? (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                setLightboxIndex((lightboxIndex + 1) % imageAttachments.length);
+              }}
+              aria-label="Next image"
+              className="absolute right-4 top-1/2 z-10 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white transition hover:bg-black/70"
+            >
+              <ChevronRight size={25} aria-hidden />
+            </button>
+          ) : null}
+
+          {imageAttachments.length > 1 ? (
+            <div
+              className="absolute bottom-3 left-1/2 flex max-w-[90vw] -translate-x-1/2 gap-2 overflow-x-auto rounded-xl bg-black/35 p-1.5"
+              onClick={(event) => event.stopPropagation()}
+            >
+              {imageAttachments.map((image, index) => (
+                <button
+                  key={image.id}
+                  type="button"
+                  onClick={() => setLightboxIndex(index)}
+                  aria-label={`Show image ${index + 1}`}
+                  aria-current={index === lightboxIndex ? "true" : undefined}
+                  className={`h-10 w-10 shrink-0 overflow-hidden rounded-md border-2 transition ${
+                    index === lightboxIndex
+                      ? "border-white opacity-100"
+                      : "border-transparent opacity-60 hover:opacity-100"
+                  }`}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={image.url} alt="" className="h-full w-full object-cover" />
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -435,7 +597,9 @@ function QuotedParent({ parent }: { parent: Message }) {
         className="max-w-full truncate text-xs"
         style={{ color: "var(--color-fg-secondary)" }}
       >
-        {parent.type === "image" ? "📷 Photo" : parent.content}
+        {parent.type === "image"
+          ? "📷 Photo"
+          : parent.content || (parent.attachments?.length ? "📎 Attachment" : "Message")}
       </div>
     </div>
   );
@@ -540,6 +704,21 @@ function formatRemaining(ms: number): string {
   if (totalHours < 24) return `${totalHours}h`;
   const totalDays = Math.ceil(totalHours / 24);
   return `${totalDays}d`;
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function attachmentName(url: string): string {
+  try {
+    const lastPart = new URL(url).pathname.split("/").pop();
+    return lastPart ? decodeURIComponent(lastPart) : "Attachment";
+  } catch {
+    return "Attachment";
+  }
 }
 
 /** Backend timestamps may be ISO strings without a timezone suffix; those

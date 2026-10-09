@@ -15,14 +15,32 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowLeft, Phone, Search, Video } from "lucide-react";
+import {
+  Archive,
+  ArrowDown,
+  ArrowLeft,
+  Ban,
+  BellOff,
+  CheckCircle2,
+  Clock3,
+  Images,
+  LogOut,
+  MessageSquare,
+  MoreHorizontal,
+  Pin,
+  Phone,
+  Search,
+  Settings,
+  Trash2,
+  Video,
+} from "lucide-react";
 import { toast } from "sonner";
 import { EmptyState } from "./empty-state";
 import { MessageSquareText } from "lucide-react";
 import { MessageBubble } from "./message-bubble";
 import { SystemMessage } from "./system-message";
 import { Composer } from "./composer";
-import { Avatar } from "./avatar";
+import { ConversationAvatar } from "./conversation-avatar";
 import { GroupInfoModal } from "./group-info-modal";
 import {
   getMe,
@@ -265,6 +283,7 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
   // conversationId null ↔ defined transition. We don't conditionally
   // open it; the modal itself ignores the conversation type at render.
   const [groupInfoOpen, setGroupInfoOpen] = useState(false);
+  const [chatMenuOpen, setChatMenuOpen] = useState(false);
 
   // Smart-scroll state (Phase 7 UX follow-up). We track the *id* of
   // the last message so the smart-scroll effect can fire only when a
@@ -487,6 +506,11 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
         showBackButton={showBackButton}
         onBack={onBack}
         onTitleClick={() => setGroupInfoOpen(true)}
+        isGroup={conv.type === "group"}
+        menuOpen={chatMenuOpen}
+        onMenuToggle={() => setChatMenuOpen((open) => !open)}
+        onMenuClose={() => setChatMenuOpen(false)}
+        onGroupSettings={() => { setChatMenuOpen(false); setGroupInfoOpen(true); }}
       />
 
       <div
@@ -517,6 +541,14 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
             <ArrowDown size={14} aria-hidden />
             {pendingNewCount} new {pendingNewCount === 1 ? "message" : "messages"}
           </button>
+        ) : null}
+
+        {conv.type === "group" ? (
+          <GroupIntroCard
+            conversation={conv}
+            memberCount={(conv.participants ?? []).filter((person) => person.id !== myUserId).length}
+            onOpen={() => setGroupInfoOpen(true)}
+          />
         ) : null}
 
         {messagesQuery.isLoading ? (
@@ -608,10 +640,19 @@ type HeaderSubject = {
   avatar_url: string;
   display_name: string;
   last_seen: string | null;
+  is_group: boolean;
 };
 
 /** Header shows the *other* party for direct, a synthetic for group. */
 function headerSubjectFor(conv: Conversation, myUserId: number | null): HeaderSubject {
+  if (conv.type === "group") {
+    return {
+      avatar_url: conv.avatar_url ?? "",
+      display_name: conv.name ?? "Group",
+      last_seen: null,
+      is_group: true,
+    };
+  }
   const other =
     conv.participants?.find((p) => p.id !== myUserId) ?? conv.participants?.[0];
   if (other) {
@@ -619,12 +660,14 @@ function headerSubjectFor(conv: Conversation, myUserId: number | null): HeaderSu
       avatar_url: (conv.avatar_url ?? other.avatar_url ?? "") as string,
       display_name: other.display_name ?? other.phone ?? "?",
       last_seen: other.last_seen ?? null,
+      is_group: false,
     };
   }
   return {
     avatar_url: (conv.avatar_url ?? "") as string,
     display_name: conv.name ?? "Unknown",
     last_seen: null,
+    is_group: false,
   };
 }
 
@@ -635,6 +678,11 @@ interface ChatHeaderProps {
   showBackButton: boolean;
   onBack?: () => void;
   onTitleClick?: () => void;
+  isGroup: boolean;
+  menuOpen: boolean;
+  onMenuToggle: () => void;
+  onMenuClose: () => void;
+  onGroupSettings: () => void;
 }
 
 function ChatHeader({
@@ -644,6 +692,11 @@ function ChatHeader({
   showBackButton,
   onBack,
   onTitleClick,
+  isGroup,
+  menuOpen,
+  onMenuToggle,
+  onMenuClose,
+  onGroupSettings,
 }: ChatHeaderProps) {
   return (
     <header
@@ -663,7 +716,12 @@ function ChatHeader({
           <ArrowLeft size={18} />
         </button>
       ) : null}
-      <Avatar subject={headerSubject} size={40} />
+      <ConversationAvatar
+        avatarUrl={headerSubject.avatar_url}
+        displayName={headerSubject.display_name}
+        isGroup={headerSubject.is_group}
+        size={40}
+      />
       <button
         type="button"
         onClick={onTitleClick}
@@ -679,24 +737,110 @@ function ChatHeader({
           {subtitle}
         </span>
       </button>
-      <IconBtn aria-label="Search in conversation">
-        <Search size={18} />
-      </IconBtn>
       <IconBtn
-        aria-label="Voice call — coming soon"
+        aria-label="Voice call"
         title="Voice calls — coming soon"
         onClick={() => toast.info("Voice calls — coming soon")}
       >
         <Phone size={18} />
       </IconBtn>
       <IconBtn
-        aria-label="Video call — coming soon"
+        aria-label="Video call"
         title="Video calls — coming soon"
         onClick={() => toast.info("Video calls — coming soon")}
       >
         <Video size={18} />
       </IconBtn>
+      <IconBtn aria-label="Search in conversation" onClick={() => toast.info("Search in chat — coming soon")}>
+        <Search size={18} />
+      </IconBtn>
+      <div className="relative">
+        <IconBtn
+          aria-label="Chat options"
+          title="Chat options"
+          aria-expanded={menuOpen}
+          aria-haspopup="menu"
+          onClick={onMenuToggle}
+        >
+          <MoreHorizontal size={19} />
+        </IconBtn>
+        {menuOpen ? <ChatOptionsMenu isGroup={isGroup} onClose={onMenuClose} onGroupSettings={onGroupSettings} /> : null}
+      </div>
     </header>
+  );
+}
+
+function ChatOptionsMenu({ isGroup, onClose, onGroupSettings }: { isGroup: boolean; onClose: () => void; onGroupSettings: () => void }) {
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    function onPointerDown(event: MouseEvent) {
+      if (!menuRef.current?.contains(event.target as Node)) onClose();
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [onClose]);
+
+  const comingSoon = (label: string) => {
+    onClose();
+    toast.info(`${label} — coming soon`);
+  };
+
+  const items = [
+    { label: "Disappearing messages", icon: <Clock3 size={15} />, action: onGroupSettings, arrow: true },
+    { label: "Mute notifications", icon: <BellOff size={15} />, action: () => comingSoon("Mute notifications"), arrow: true },
+    ...(isGroup ? [{ label: "Group settings", icon: <Settings size={15} />, action: onGroupSettings, arrow: false }] : []),
+    { label: "All media", icon: <Images size={15} />, action: () => comingSoon("All media"), arrow: false },
+    { label: "Select messages", icon: <CheckCircle2 size={15} />, action: () => comingSoon("Select messages"), dividerBefore: true },
+    { label: "Mark as unread", icon: <MessageSquare size={15} />, action: () => comingSoon("Mark as unread"), dividerBefore: true },
+    { label: "Pin chat", icon: <Pin size={15} />, action: () => comingSoon("Pin chat") },
+    { label: "Archive", icon: <Archive size={15} />, action: () => comingSoon("Archive") },
+    { label: "Block", icon: <Ban size={15} />, action: () => comingSoon("Block") },
+    { label: "Delete", icon: <Trash2 size={15} />, action: () => comingSoon("Delete") },
+    ...(isGroup ? [{ label: "Leave group", icon: <LogOut size={15} />, action: () => comingSoon("Leave group") }] : []),
+  ];
+
+  return (
+    <div ref={menuRef} role="menu" aria-label="Chat options" className="absolute right-0 top-full z-40 mt-4 w-60 overflow-hidden rounded-xl border bg-[var(--color-bg-elevated)] p-1.5 shadow-xl" style={{ borderColor: "var(--color-border-subtle)" }}>
+      {items.map((item, index) => (
+        <div key={item.label}>
+          {"dividerBefore" in item && item.dividerBefore ? <div className="mx-2 my-1 h-px" style={{ backgroundColor: "var(--color-border-subtle)" }} /> : null}
+          <button type="button" role="menuitem" onClick={item.action} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm text-[var(--color-fg-primary)] transition hover:bg-[var(--color-bg-tertiary)]">
+            <span className="text-[var(--color-fg-secondary)]">{item.icon}</span>
+            <span className="min-w-0 flex-1">{item.label}</span>
+            {"arrow" in item && item.arrow ? <span aria-hidden className="text-[var(--color-fg-muted)]">›</span> : null}
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function GroupIntroCard({ conversation, memberCount, onOpen }: { conversation: Conversation; memberCount: number; onOpen: () => void }) {
+  return (
+    <div className="flex justify-center px-4 pb-3 pt-8">
+      <button
+        type="button"
+        onClick={onOpen}
+        className="flex min-w-[220px] max-w-[min(100%,340px)] flex-col items-center rounded-[28px] border px-8 pb-5 pt-0 text-center transition hover:bg-[var(--color-bg-secondary)]"
+        style={{ borderColor: "var(--color-border-subtle)" }}
+      >
+        <span className="-mt-5 mb-2 rounded-full ring-4 ring-[var(--color-bg-primary)]">
+          <ConversationAvatar avatarUrl={conversation.avatar_url} displayName={conversation.name ?? "Group"} isGroup size={64} />
+        </span>
+        <span className="max-w-full truncate text-base font-semibold text-[var(--color-fg-primary)]">{conversation.name ?? "Group"}</span>
+        <span className="mt-1 text-xs text-[var(--color-fg-secondary)]">
+          {memberCount === 0 ? "No other group members yet" : `${memberCount} ${memberCount === 1 ? "member" : "members"}`}
+        </span>
+      </button>
+    </div>
   );
 }
 
