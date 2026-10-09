@@ -12,6 +12,8 @@
 
 # testing
 /coverage
+/playwright-report
+/test-results
 
 # next.js
 /.next/
@@ -30,8 +32,10 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files — ignore all by default, but explicitly allow
+# .env.example so fresh clones get the documented defaults.
 .env*
+!.env.example
 
 # vercel
 .vercel
@@ -39,8 +43,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local-only artefacts (kept out of the public deploy package)
 expected_ui/
 task.md
 scripts/
-scripts/
-scripts
