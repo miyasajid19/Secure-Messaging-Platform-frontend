@@ -107,12 +107,13 @@ function outgoingReadersForMessage(
 }
 
 export function ChatPane({ showBackButton = false, onBack }: Props) {
-  const { startCall } = useVoiceCall();
+  const { startCall, startGroupCall, joinGroupCall } = useVoiceCall();
   const conversationId = useUiStore((s) => s.selectedConversationId);
   const setSelectedConversation = useUiStore((s) => s.setSelected);
   const storedUser = useAuthStore((s) => s.user);
   const typingByConversation = useRealtimeStore((s) => s.typingByConversation);
   const presenceByUser = useRealtimeStore((s) => s.presenceByUser);
+  const activeGroupCall = useRealtimeStore((s) => conversationId == null ? undefined : s.activeGroupCalls[conversationId]);
 
   // Re-validate the current user via /auth/me so Composer can render
   // optimistic messages with the right `sender` shape. Falls back to
@@ -555,6 +556,11 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
         onGroupSettings={() => { setChatMenuOpen(false); setGroupInfoOpen(true); }}
         onLeaveGroup={handleLeaveGroup}
         canVoiceCall={conv.type === "direct" && !!otherParticipant}
+        canGroupCall={conv.type === "group" && conv.participants.length > 1}
+        onGroupAudioCall={() => void startGroupCall(cid, conv.name ?? "Group call", conv.avatar_url ?? null, conv.participants.map((participant) => ({ id: participant.id, displayName: participant.display_name ?? participant.username ?? participant.phone ?? "Signal user", avatarUrl: participant.avatar_url })), "audio")}
+        onGroupVideoCall={() => void startGroupCall(cid, conv.name ?? "Group call", conv.avatar_url ?? null, conv.participants.map((participant) => ({ id: participant.id, displayName: participant.display_name ?? participant.username ?? participant.phone ?? "Signal user", avatarUrl: participant.avatar_url })), "video")}
+        showJoinGroupCall={conv.type === "group" && !!activeGroupCall && !activeGroupCall.participants.some((participant) => participant.id === myUserId)}
+        onJoinGroupCall={() => { if (activeGroupCall) void joinGroupCall(activeGroupCall, conv.avatar_url); }}
         onVoiceCall={() => {
           if (!otherParticipant) return;
           void startCall(
@@ -748,6 +754,11 @@ interface ChatHeaderProps {
   onGroupSettings: () => void;
   onLeaveGroup: () => void;
   canVoiceCall: boolean;
+  canGroupCall: boolean;
+  onGroupAudioCall: () => void;
+  onGroupVideoCall: () => void;
+  showJoinGroupCall: boolean;
+  onJoinGroupCall: () => void;
   onVoiceCall: () => void;
   onVideoCall: () => void;
 }
@@ -766,6 +777,11 @@ function ChatHeader({
   onGroupSettings,
   onLeaveGroup,
   canVoiceCall,
+  canGroupCall,
+  onGroupAudioCall,
+  onGroupVideoCall,
+  showJoinGroupCall,
+  onJoinGroupCall,
   onVoiceCall,
   onVideoCall,
 }: ChatHeaderProps) {
@@ -813,14 +829,19 @@ function ChatHeader({
           <Phone size={18} />
         </IconBtn>
       ) : null}
-      <IconBtn
+      {canGroupCall ? <>
+        <IconBtn aria-label="Start group voice call" title="Start group voice call" onClick={onGroupAudioCall}><Phone size={18} /></IconBtn>
+        <IconBtn aria-label="Start group video call" title="Start group video call" onClick={onGroupVideoCall} className="hidden sm:flex"><Video size={18} /></IconBtn>
+      </> : null}
+      {!isGroup ? <IconBtn
         aria-label="Video call"
         title="Start video call"
         onClick={onVideoCall}
         className="hidden sm:flex"
       >
         <Video size={18} />
-      </IconBtn>
+      </IconBtn> : null}
+      {showJoinGroupCall ? <button type="button" onClick={onJoinGroupCall} className="shrink-0 rounded-full bg-green-600 px-3 py-2 text-sm font-semibold text-white hover:bg-green-700 sm:px-4">Join call</button> : null}
       <IconBtn aria-label="Search in conversation" onClick={() => toast.info("Search in chat — coming soon")} className="hidden sm:flex">
         <Search size={18} />
       </IconBtn>

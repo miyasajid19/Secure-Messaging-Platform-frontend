@@ -606,6 +606,23 @@ export interface IceServer {
 export const getIceServers = () =>
   apiFetch<{ ice_servers: IceServer[] }>("/calls/ice-servers", { method: "GET" });
 
+export interface CallHistoryEntry {
+  call_id: string;
+  conversation_id: number;
+  peer_id: number | null;
+  peer_name: string;
+  peer_avatar_url: string | null;
+  media_type: "audio" | "video";
+  direction: "incoming" | "outgoing";
+  outcome: "completed" | "missed" | "declined" | "cancelled";
+  timestamp: string;
+  duration_seconds: number;
+  is_group: boolean;
+}
+
+export const getCallHistory = (limit = 100) =>
+  apiFetch<CallHistoryEntry[]>(`/calls/history?limit=${limit}`, { method: "GET" });
+
 /** Map backend's status string (`sending|sent|delivered|read|failed`) to
  *  the value our bubble component uses. An absent/unknown status means
  *  we know only that the message was sent; it is not proof of delivery

@@ -13,9 +13,9 @@ import { Camera, CameraOff, Mic, MicOff, Phone, PhoneOff, Video } from "lucide-r
 import { toast } from "sonner";
 import { Avatar } from "@/components/avatar";
 import { useAuthStore } from "@/store/auth";
+import { useRealtimeStore, type ActiveGroupCall } from "@/store/realtime";
 import { getIceServers, type IceServer } from "@/lib/api";
 import { isRealtimeConnected, sendCallSignal, subscribeToCallSignals, type CallSignal } from "@/lib/realtime";
-import { saveCallHistoryEntry, type CallOutcome } from "@/lib/call-history";
 
 type CallState = {
   callId: string;
@@ -30,12 +30,16 @@ type CallState = {
   muted: boolean;
   cameraOff: boolean;
   peerCameraOff: boolean;
-  createdAt: number;
+  isGroup: boolean;
+  participants: Array<{ id: number; displayName: string; avatarUrl: string | null }>;
+  peerCameraOffById: Record<number, boolean>;
 };
 
 type VoiceCallContextValue = {
   call: CallState | null;
   startCall: (conversationId: number, peerId: number, peerName: string, peerAvatarUrl?: string | null, mediaType?: "audio" | "video") => Promise<void>;
+  startGroupCall: (conversationId: number, groupName: string, groupAvatarUrl: string | null, participants: Array<{ id: number; displayName: string; avatarUrl: string | null }>, mediaType: "audio" | "video") => Promise<void>;
+  joinGroupCall: (active: ActiveGroupCall, groupAvatarUrl: string | null) => Promise<void>;
 };
 
 const VoiceCallContext = createContext<VoiceCallContextValue | null>(null);
@@ -52,48 +56,33 @@ export function useVoiceCall() {
 
 export function VoiceCallProvider({ children }: { children: ReactNode }) {
   const self = useAuthStore((state) => state.user);
+  const setActiveGroupCall = useRealtimeStore((state) => state.setActiveGroupCall);
+  const clearActiveGroupCall = useRealtimeStore((state) => state.clearActiveGroupCall);
   const [call, setCall] = useState<CallState | null>(null);
   const [audioNeedsInteraction, setAudioNeedsInteraction] = useState(false);
+  const [remoteStreams, setRemoteStreams] = useState<Record<number, MediaStream>>({});
   const [clock, setClock] = useState(Date.now());
   const callRef = useRef<CallState | null>(null);
-  const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const peerConnectionsRef = useRef(new Map<number, RTCPeerConnection>());
   const localStreamRef = useRef<MediaStream | null>(null);
-  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
-  const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const remoteAudioElementsRef = useRef(new Map<number, HTMLAudioElement>());
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
-  const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  const pendingCandidatesRef = useRef(new Map<number, RTCIceCandidateInit[]>());
 
   const updateCall = useCallback((next: CallState | null) => {
     callRef.current = next;
     setCall(next);
   }, []);
 
-  const logCall = useCallback((session: CallState, outcome: CallOutcome) => {
-    if (!self?.id) return;
-    saveCallHistoryEntry(self.id, {
-      callId: session.callId,
-      conversationId: session.conversationId,
-      peerId: session.peerId,
-      peerName: session.peerName,
-      peerAvatarUrl: session.peerAvatarUrl,
-      mediaType: session.mediaType,
-      direction: session.direction,
-      outcome,
-      timestamp: new Date(session.createdAt).toISOString(),
-      durationSeconds: session.startedAt ? Math.max(0, Math.floor((Date.now() - session.startedAt) / 1000)) : 0,
-    });
-  }, [self?.id]);
-
   const cleanup = useCallback(() => {
-    const connection = peerConnectionRef.current;
-    peerConnectionRef.current = null;
+    const connections = [...peerConnectionsRef.current.values()];
+    peerConnectionsRef.current.clear();
     updateCall(null);
-    connection?.close();
+    connections.forEach((connection) => connection.close());
     localStreamRef.current?.getTracks().forEach((track) => track.stop());
     localStreamRef.current = null;
-    pendingCandidatesRef.current = [];
-    if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
-    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+    pendingCandidatesRef.current.clear();
+    setRemoteStreams({});
     setAudioNeedsInteraction(false);
   }, [updateCall]);
 
@@ -105,10 +94,11 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const createPeerConnection = useCallback(async (session: CallState) => {
-    if (peerConnectionRef.current) return peerConnectionRef.current;
+  const createPeerConnection = useCallback(async (session: CallState, remoteUserId: number) => {
+    const existing = peerConnectionsRef.current.get(remoteUserId);
+    if (existing) return existing;
     const pc = new RTCPeerConnection({ iceServers: await iceServers() });
-    peerConnectionRef.current = pc;
+    peerConnectionsRef.current.set(remoteUserId, pc);
     localStreamRef.current?.getTracks().forEach((track) => pc.addTrack(track, localStreamRef.current!));
     pc.onicecandidate = (event) => {
       if (!event.candidate) return;
@@ -116,30 +106,13 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
         type: "call.ice",
         call_id: session.callId,
         conversation_id: session.conversationId,
-        to_user_id: session.peerId,
+        to_user_id: remoteUserId,
         candidate: event.candidate.toJSON(),
       });
     };
     pc.ontrack = (event) => {
       const stream = event.streams[0] ?? new MediaStream([event.track]);
-      if (session.mediaType === "video") {
-        // Play incoming audio through a dedicated audio element. Keeping
-        // the video element muted avoids duplicate audio while making it
-        // possible to recover cleanly when the browser blocks autoplay.
-        const audio = remoteAudioRef.current;
-        if (audio && stream.getAudioTracks().length) {
-          audio.srcObject = new MediaStream(stream.getAudioTracks());
-          void audio.play().then(() => setAudioNeedsInteraction(false)).catch(() => setAudioNeedsInteraction(true));
-        }
-        if (remoteVideoRef.current) {
-          remoteVideoRef.current.srcObject = stream;
-          remoteVideoRef.current.muted = true;
-          void remoteVideoRef.current.play().catch(() => {});
-        }
-      } else if (remoteAudioRef.current) {
-        remoteAudioRef.current.srcObject = stream;
-        void remoteAudioRef.current.play().catch(() => {});
-      }
+      setRemoteStreams((current) => ({ ...current, [remoteUserId]: stream }));
     };
     pc.onconnectionstatechange = () => {
       const current = callRef.current;
@@ -149,28 +122,32 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
       } else if (pc.connectionState === "disconnected") {
         updateCall({ ...current, status: "connecting" });
       } else if (pc.connectionState === "failed" || pc.connectionState === "closed") {
-        cleanup();
+        if (session.isGroup) {
+          peerConnectionsRef.current.delete(remoteUserId);
+          setRemoteStreams((streams) => { const next = { ...streams }; delete next[remoteUserId]; return next; });
+        } else cleanup();
         if (pc.connectionState === "failed") toast.error("Call connection failed");
       }
     };
     return pc;
   }, [cleanup, iceServers, updateCall]);
 
-  const flushCandidates = useCallback(async (pc: RTCPeerConnection) => {
-    const queued = pendingCandidatesRef.current.splice(0);
+  const flushCandidates = useCallback(async (pc: RTCPeerConnection, remoteUserId: number) => {
+    const queued = pendingCandidatesRef.current.get(remoteUserId) ?? [];
+    pendingCandidatesRef.current.delete(remoteUserId);
     for (const candidate of queued) await pc.addIceCandidate(candidate);
   }, []);
 
-  const sendOffer = useCallback(async (session: CallState) => {
+  const sendOffer = useCallback(async (session: CallState, remoteUserId: number) => {
     try {
-      const pc = await createPeerConnection(session);
+      const pc = await createPeerConnection(session, remoteUserId);
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       sendCallSignal({
         type: "call.offer",
         call_id: session.callId,
         conversation_id: session.conversationId,
-        to_user_id: session.peerId,
+        to_user_id: remoteUserId,
         description: pc.localDescription?.toJSON() ?? offer,
       });
     } catch {
@@ -180,17 +157,37 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
   }, [cleanup, createPeerConnection]);
 
   const handleSignal = useCallback(async (signal: CallSignal) => {
+    if (signal.type === "call.group_state" && signal.conversation_id && signal.call_id) {
+      if (signal.active && signal.participants) {
+        setActiveGroupCall({
+          call_id: signal.call_id,
+          conversation_id: signal.conversation_id,
+          group_name: signal.group_name || "Group call",
+          media_type: signal.media_type === "video" ? "video" : "audio",
+          caller_id: signal.caller_id ?? signal.from_user_id ?? 0,
+          participants: signal.participants,
+        });
+      } else {
+        clearActiveGroupCall(signal.conversation_id, signal.call_id);
+      }
+      return;
+    }
     if (signal.type === "call.incoming") {
       if (!signal.call_id || !signal.conversation_id || !signal.from_user_id) return;
       if (callRef.current) {
-        sendCallSignal({ type: "call.reject", call_id: signal.call_id, conversation_id: signal.conversation_id, to_user_id: signal.from_user_id, media_type: signal.media_type });
+        sendCallSignal({ type: "call.reject", call_id: signal.call_id, conversation_id: signal.conversation_id, to_user_id: signal.from_user_id, media_type: signal.media_type, is_group: signal.is_group });
         return;
       }
+      const inviter = {
+        id: signal.from_user_id,
+        displayName: signal.from_name || "Signal user",
+        avatarUrl: signal.from_avatar_url ?? null,
+      };
       updateCall({
         callId: signal.call_id,
         conversationId: signal.conversation_id,
         peerId: signal.from_user_id,
-        peerName: signal.from_name || "Signal user",
+        peerName: signal.is_group ? signal.group_name || "Group call" : inviter.displayName,
         peerAvatarUrl: signal.from_avatar_url ?? null,
         mediaType: signal.media_type === "video" ? "video" : "audio",
         direction: "incoming",
@@ -199,7 +196,9 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
         muted: false,
         cameraOff: false,
         peerCameraOff: false,
-        createdAt: Date.now(),
+        isGroup: signal.is_group === true,
+        participants: signal.is_group ? [inviter] : [],
+        peerCameraOffById: {},
       });
       return;
     }
@@ -207,8 +206,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     if (signal.type === "call.error") {
       toast.error(signal.message || "Call request failed");
       const currentCall = callRef.current;
-      if (currentCall?.status === "ringing") {
-        logCall(currentCall, "missed");
+      if (currentCall?.status === "ringing" || (currentCall?.isGroup && currentCall.status === "connecting")) {
         cleanup();
       }
       return;
@@ -216,47 +214,69 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     const current = callRef.current;
     if (!current || !signal.call_id || signal.call_id !== current.callId) return;
 
-    if (signal.type === "call.camera" && typeof signal.camera_off === "boolean") {
-      updateCall({ ...current, peerCameraOff: signal.camera_off });
+    if (signal.type === "call.camera" && typeof signal.camera_off === "boolean" && signal.from_user_id) {
+      updateCall({
+        ...current,
+        peerCameraOff: signal.camera_off,
+        peerCameraOffById: { ...current.peerCameraOffById, [signal.from_user_id]: signal.camera_off },
+      });
+      return;
+    }
+
+    if (current.isGroup && signal.type === "call.participant_joined" && signal.participants) {
+      updateCall({
+        ...current,
+        participants: signal.participants.map((participant) => ({ id: participant.id, displayName: participant.display_name, avatarUrl: participant.avatar_url })),
+        status: current.direction === "outgoing" && current.status === "ringing" ? "connecting" : current.status,
+      });
+      return;
+    }
+
+    if (current.isGroup && signal.type === "call.participant_left" && signal.participants) {
+      const participants = signal.participants.map((participant) => ({ id: participant.id, displayName: participant.display_name, avatarUrl: participant.avatar_url }));
+      const remainingIds = new Set(participants.map((participant) => participant.id));
+      for (const [userId, connection] of peerConnectionsRef.current) {
+        if (!remainingIds.has(userId)) {
+          peerConnectionsRef.current.delete(userId);
+          connection.close();
+        }
+      }
+      setRemoteStreams((streams) => Object.fromEntries(Object.entries(streams).filter(([userId]) => remainingIds.has(Number(userId)))));
+      updateCall({ ...current, participants });
+      return;
+    }
+
+    if (current.isGroup && signal.type === "call.rejected") {
       return;
     }
 
     if (["call.unavailable", "call.rejected", "call.cancelled", "call.ended", "call.peer_offline"].includes(signal.type)) {
       if (signal.type === "call.unavailable" || signal.type === "call.rejected") toast.info(signal.message || `${current.peerName} didn't answer`);
       if (signal.type === "call.peer_offline") toast.info(`${current.peerName} disconnected`);
-      const outcome: CallOutcome = current.startedAt
-        ? "completed"
-        : signal.type === "call.rejected"
-          ? "declined"
-          : signal.type === "call.cancelled" && current.direction === "incoming"
-            ? "missed"
-            : signal.type === "call.unavailable" || signal.type === "call.peer_offline" || signal.type === "call.ended"
-              ? "missed"
-              : "cancelled";
-      logCall(current, outcome);
       cleanup();
       return;
     }
 
-    if (signal.type === "call.accepted" && current.direction === "outgoing") {
+    if (signal.type === "call.accepted" && current.direction === "outgoing" && !current.isGroup) {
       updateCall({ ...current, status: "connecting" });
-      await sendOffer({ ...current, status: "connecting" });
+      await sendOffer({ ...current, status: "connecting" }, current.peerId);
       return;
     }
 
-    const pc = peerConnectionRef.current;
-    if (signal.type === "call.offer" && current.direction === "incoming" && signal.description) {
+    const remoteUserId = signal.from_user_id ?? current.peerId;
+    const pc = peerConnectionsRef.current.get(remoteUserId);
+    if (signal.type === "call.offer" && signal.description && (current.direction === "incoming" && current.status !== "ringing" || current.isGroup && current.status !== "ringing")) {
       try {
-        const connection = pc ?? await createPeerConnection(current);
+        const connection = pc ?? await createPeerConnection(current, remoteUserId);
         await connection.setRemoteDescription(signal.description);
-        await flushCandidates(connection);
+        await flushCandidates(connection, remoteUserId);
         const answer = await connection.createAnswer();
         await connection.setLocalDescription(answer);
         sendCallSignal({
           type: "call.answer",
           call_id: current.callId,
           conversation_id: current.conversationId,
-          to_user_id: current.peerId,
+          to_user_id: remoteUserId,
           description: connection.localDescription?.toJSON() ?? answer,
         });
       } catch {
@@ -266,10 +286,10 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    if (signal.type === "call.answer" && current.direction === "outgoing" && signal.description && pc) {
+    if (signal.type === "call.answer" && signal.description && pc) {
       try {
         await pc.setRemoteDescription(signal.description);
-        await flushCandidates(pc);
+        await flushCandidates(pc, remoteUserId);
       } catch {
         toast.error("Couldn't connect the call");
         cleanup();
@@ -278,16 +298,45 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     }
 
     if (signal.type === "call.ice" && signal.candidate) {
-      const connection = peerConnectionRef.current;
-      if (!connection || !connection.remoteDescription) pendingCandidatesRef.current.push(signal.candidate);
+      const connection = peerConnectionsRef.current.get(remoteUserId);
+      if (!connection || !connection.remoteDescription) {
+        const queued = pendingCandidatesRef.current.get(remoteUserId) ?? [];
+        queued.push(signal.candidate);
+        pendingCandidatesRef.current.set(remoteUserId, queued);
+      }
       else {
         try { await connection.addIceCandidate(signal.candidate); }
         catch { /* A late candidate can arrive after a call ends. */ }
       }
     }
-  }, [cleanup, createPeerConnection, flushCandidates, logCall, sendOffer, updateCall]);
+  }, [cleanup, createPeerConnection, flushCandidates, sendOffer, updateCall, setActiveGroupCall, clearActiveGroupCall]);
 
   useEffect(() => subscribeToCallSignals((signal) => { void handleSignal(signal); }), [handleSignal]);
+  useEffect(() => {
+    if (!call?.isGroup || !self || call.status === "ringing" || !localStreamRef.current) return;
+    const session = call;
+    let cancelled = false;
+    const connectPeers = async () => {
+      for (const peer of session.participants) {
+        if (peer.id === self.id || peer.id < self.id || peerConnectionsRef.current.has(peer.id)) continue;
+        try {
+          const connection = await createPeerConnection(session, peer.id);
+          if (cancelled || callRef.current?.callId !== session.callId) return;
+          const offer = await connection.createOffer();
+          await connection.setLocalDescription(offer);
+          sendCallSignal({
+            type: "call.offer", call_id: session.callId,
+            conversation_id: session.conversationId, to_user_id: peer.id,
+            description: connection.localDescription?.toJSON() ?? offer,
+          });
+        } catch {
+          if (!cancelled) toast.error(`Couldn't connect to ${peer.displayName}`);
+        }
+      }
+    };
+    void connectPeers();
+    return () => { cancelled = true; };
+  }, [call?.callId, call?.isGroup, call?.participants, call?.status, createPeerConnection, self]);
   useEffect(() => {
     if (!call || call.status !== "ringing") return;
     const timer = window.setTimeout(() => {
@@ -297,16 +346,15 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
         type: current.direction === "outgoing" ? "call.cancel" : "call.reject",
         call_id: current.callId,
         conversation_id: current.conversationId,
-        to_user_id: current.peerId,
+      to_user_id: current.peerId,
         media_type: current.mediaType,
         reason: "timeout",
       });
-      logCall(current, "missed");
       cleanup();
       if (current.direction === "outgoing") toast.info("No answer");
     }, 30_000);
     return () => window.clearTimeout(timer);
-  }, [call, cleanup, logCall]);
+  }, [call, cleanup]);
 
   // Use Web Audio for a small local ringback/ringtone, so no external
   // sound file or extra dependency is needed. The effect is torn down
@@ -388,13 +436,14 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     }
     const session: CallState = {
       callId: crypto.randomUUID(), conversationId, peerId, peerName, peerAvatarUrl,
-      mediaType, direction: "outgoing", status: "ringing", startedAt: null, muted: false, cameraOff: false, peerCameraOff: false, createdAt: Date.now(),
+      mediaType, direction: "outgoing", status: "ringing", startedAt: null, muted: false, cameraOff: false, peerCameraOff: false,
+      isGroup: false, participants: [], peerCameraOffById: {},
     };
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: mediaType === "video" });
       localStreamRef.current = stream;
       updateCall(session);
-      if (!sendCallSignal({ type: "call.invite", call_id: session.callId, conversation_id: conversationId, to_user_id: peerId, media_type: mediaType })) {
+    if (!sendCallSignal({ type: "call.invite", call_id: session.callId, conversation_id: conversationId, to_user_id: peerId, media_type: mediaType })) {
         cleanup();
         toast.error("Call signaling is unavailable");
       }
@@ -407,13 +456,87 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     }
   }, [cleanup, updateCall]);
 
+  const startGroupCall = useCallback(async (
+    conversationId: number,
+    groupName: string,
+    groupAvatarUrl: string | null,
+    participants: Array<{ id: number; displayName: string; avatarUrl: string | null }>,
+    mediaType: "audio" | "video",
+  ) => {
+    if (callRef.current) { toast.info("You're already in a call"); return; }
+    if (!isRealtimeConnected()) { toast.error("Reconnecting to calls. Try again in a moment."); return; }
+    const invitees = participants.filter((participant) => participant.id !== self?.id);
+    if (!invitees.length) { toast.info("There are no other group members to call"); return; }
+    if (invitees.length > 8) { toast.error("Group calls currently support up to 9 people"); return; }
+    const session: CallState = {
+      callId: crypto.randomUUID(), conversationId, peerId: invitees[0].id,
+      peerName: groupName, peerAvatarUrl: groupAvatarUrl, mediaType,
+      direction: "outgoing", status: "ringing", startedAt: null,
+      muted: false, cameraOff: false, peerCameraOff: false, isGroup: true,
+      participants: self ? [{ id: self.id, displayName: self.display_name ?? self.username ?? "You", avatarUrl: self.avatar_url }] : [],
+      peerCameraOffById: {},
+    };
+    try {
+      localStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true, video: mediaType === "video" });
+      updateCall(session);
+      if (!sendCallSignal({
+        type: "call.invite", call_id: session.callId, conversation_id: conversationId,
+        to_user_ids: invitees.map((participant) => participant.id), media_type: mediaType,
+      })) {
+        cleanup();
+        toast.error("Call signaling is unavailable");
+      }
+    } catch (error) {
+      cleanup();
+      toast.error(error instanceof DOMException && error.name === "NotAllowedError" ? "Allow camera and microphone access" : "Couldn't access your camera or microphone");
+    }
+  }, [cleanup, self, updateCall]);
+
+  const joinGroupCall = useCallback(async (active: ActiveGroupCall, groupAvatarUrl: string | null) => {
+    if (callRef.current) { toast.info("You're already in a call"); return; }
+    if (!isRealtimeConnected()) { toast.error("Reconnecting to calls. Try again in a moment."); return; }
+    if (active.participants.length >= 9) { toast.error("This group call is full"); return; }
+    const others = active.participants.filter((participant) => participant.id !== self?.id);
+    if (!others.length) { toast.info("This call has already ended"); return; }
+    const session: CallState = {
+      callId: active.call_id,
+      conversationId: active.conversation_id,
+      peerId: active.caller_id || others[0].id,
+      peerName: active.group_name,
+      peerAvatarUrl: groupAvatarUrl,
+      mediaType: active.media_type,
+      direction: "incoming",
+      status: "connecting",
+      startedAt: Date.now(),
+      muted: false,
+      cameraOff: false,
+      peerCameraOff: false,
+      isGroup: true,
+      participants: active.participants.map((participant) => ({ id: participant.id, displayName: participant.display_name, avatarUrl: participant.avatar_url })),
+      peerCameraOffById: {},
+    };
+    try {
+      localStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true, video: active.media_type === "video" });
+      updateCall(session);
+      if (!sendCallSignal({
+        type: "call.join",
+        call_id: active.call_id,
+        conversation_id: active.conversation_id,
+        to_user_id: active.caller_id || others[0].id,
+      })) throw new Error("Call signaling is unavailable");
+    } catch (error) {
+      cleanup();
+      toast.error(error instanceof DOMException && error.name === "NotAllowedError" ? "Allow microphone and camera access to join" : "Couldn't join the call");
+    }
+  }, [cleanup, self, updateCall]);
+
   async function acceptCall() {
     const current = callRef.current;
     if (!current || current.direction !== "incoming") return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: current.mediaType === "video" });
       localStreamRef.current = stream;
-      await createPeerConnection(current);
+      if (!current.isGroup) await createPeerConnection(current, current.peerId);
       if (!sendCallSignal({ type: "call.accept", call_id: current.callId, conversation_id: current.conversationId, to_user_id: current.peerId })) {
         throw new Error("Signaling is disconnected");
       }
@@ -428,17 +551,19 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
   function declineOrEnd() {
     const current = callRef.current;
     if (!current) return;
-    const outcome: CallOutcome = current.startedAt
-      ? "completed"
-      : current.direction === "incoming"
-        ? "declined"
-        : "cancelled";
-    logCall(current, outcome);
+    const terminationType = current.direction === "incoming" && current.status === "ringing"
+      ? "call.reject"
+      : current.status === "ringing"
+        ? "call.cancel"
+        : current.isGroup ? "call.leave" : "call.end";
+    const recipientId = current.isGroup
+      ? current.participants.find((participant) => participant.id !== self?.id)?.id ?? current.peerId
+      : current.peerId;
     sendCallSignal({
-      type: current.direction === "incoming" && current.status === "ringing" ? "call.reject" : current.status === "ringing" ? "call.cancel" : "call.end",
+      type: terminationType,
       call_id: current.callId,
       conversation_id: current.conversationId,
-      to_user_id: current.peerId,
+      to_user_id: recipientId,
       media_type: current.mediaType,
       ...(current.status === "active" && current.startedAt ? { duration_seconds: Math.floor((Date.now() - current.startedAt) / 1000) } : {}),
     });
@@ -461,19 +586,23 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     track.enabled = !track.enabled;
     const cameraOff = !track.enabled;
     updateCall({ ...current, cameraOff });
-    sendCallSignal({ type: "call.camera", call_id: current.callId, conversation_id: current.conversationId, to_user_id: current.peerId, camera_off: cameraOff });
+    const recipients = current.isGroup
+      ? current.participants.filter((participant) => participant.id !== self?.id).map((participant) => participant.id)
+      : [current.peerId];
+    recipients.forEach((peerId) => sendCallSignal({ type: "call.camera", call_id: current.callId, conversation_id: current.conversationId, to_user_id: peerId, camera_off: cameraOff }));
   }
 
   async function enableCallAudio() {
-    const audio = remoteAudioRef.current;
-    if (!audio) return;
-    try {
-      await audio.play();
-      setAudioNeedsInteraction(false);
-    } catch {
-      setAudioNeedsInteraction(true);
-    }
+    const results = await Promise.allSettled(
+      [...remoteAudioElementsRef.current.values()].map((audio) => audio.play()),
+    );
+    setAudioNeedsInteraction(results.some((result) => result.status === "rejected"));
   }
+
+  const registerRemoteAudio = useCallback((userId: number, element: HTMLAudioElement | null) => {
+    if (element) remoteAudioElementsRef.current.set(userId, element);
+    else remoteAudioElementsRef.current.delete(userId);
+  }, []);
 
   useEffect(() => {
     if (localVideoRef.current && localStreamRef.current && call?.mediaType === "video") {
@@ -485,42 +614,59 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 
   const seconds = call?.startedAt ? Math.max(0, Math.floor((clock - call.startedAt) / 1000)) : 0;
   const duration = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+  const remoteParticipants = call
+    ? call.isGroup
+      ? call.participants.filter((participant) => participant.id !== self?.id)
+      : [{ id: call.peerId, displayName: call.peerName, avatarUrl: call.peerAvatarUrl }]
+    : [];
 
   return (
-    <VoiceCallContext.Provider value={{ call, startCall }}>
+    <VoiceCallContext.Provider value={{ call, startCall, startGroupCall, joinGroupCall }}>
       {children}
-      <audio ref={remoteAudioRef} autoPlay playsInline />
+      {Object.entries(remoteStreams).map(([userId, stream]) => <audio key={`audio-${userId}`} autoPlay playsInline className="sr-only" ref={(element) => {
+        const id = Number(userId);
+        if (!element) { registerRemoteAudio(id, null); return; }
+        registerRemoteAudio(id, element);
+        if (stream.getAudioTracks().length) {
+          element.srcObject = new MediaStream(stream.getAudioTracks());
+          void element.play().then(() => setAudioNeedsInteraction(false)).catch(() => setAudioNeedsInteraction(true));
+        }
+      }} />)}
       {call?.mediaType === "video" ? <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black p-3 sm:p-6" role="presentation">
         <section role="dialog" aria-modal="true" aria-label="Video call" className="relative h-full max-h-[min(82vh,900px)] w-full max-w-5xl overflow-hidden rounded-3xl bg-neutral-950 text-white shadow-2xl">
-          <video ref={remoteVideoRef} autoPlay playsInline className={`h-full w-full object-cover ${call.peerCameraOff ? "hidden" : ""}`} />
-          {call.peerCameraOff ? <div className="absolute inset-0 flex items-center justify-center bg-neutral-900"><Avatar subject={{ avatar_url: call.peerAvatarUrl, display_name: call.peerName }} size={144} showOnline={false} /></div> : null}
-          <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/45 via-transparent to-black/55" />
-          <div className="absolute left-5 top-5 z-10"><h2 className="text-xl font-semibold">{call.peerName}</h2><p className="text-sm text-white/80">{call.status === "active" ? duration : call.direction === "incoming" ? "Incoming video call" : call.status === "connecting" ? "Connecting…" : "Calling…"}</p></div>
-          {audioNeedsInteraction ? <button onClick={() => void enableCallAudio()} className="absolute left-1/2 top-5 z-20 -translate-x-1/2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-black shadow-lg hover:bg-white/90">Tap to enable audio</button> : null}
-          {call.status !== "active" && !call.peerCameraOff ? <div className="absolute inset-0 flex items-center justify-center"><Avatar subject={{ avatar_url: call.peerAvatarUrl, display_name: call.peerName }} size={112} showOnline={false} /></div> : null}
+          <div className="absolute inset-0 grid gap-3 p-3 sm:p-5" style={{ gridTemplateColumns: `repeat(${Math.max(1, Math.ceil(Math.sqrt(remoteParticipants.length || 1)))}, minmax(0, 1fr))` }}>
+            {remoteParticipants.map((participant) => {
+              const stream = remoteStreams[participant.id];
+              const cameraOff = call.isGroup ? Boolean(call.peerCameraOffById[participant.id]) : call.peerCameraOff;
+              return <div key={participant.id} className="relative flex min-h-0 items-center justify-center overflow-hidden rounded-2xl bg-neutral-900">
+                {stream && !cameraOff ? <video autoPlay playsInline className="h-full w-full object-cover" ref={(element) => {
+                  if (element) { element.srcObject = stream; element.muted = true; void element.play().catch(() => {}); }
+                }} /> : <Avatar subject={{ avatar_url: participant.avatarUrl, display_name: participant.displayName }} size={112} showOnline={false} />}
+                <span className="absolute bottom-3 left-3 rounded-full bg-black/45 px-3 py-1 text-sm">{participant.displayName}</span>
+              </div>;
+            })}
+            {remoteParticipants.length === 0 ? <div className="flex min-h-0 flex-col items-center justify-center rounded-2xl bg-neutral-900"><Avatar subject={{ avatar_url: call.peerAvatarUrl, display_name: call.peerName }} size={112} showOnline={false} /><p className="mt-4 text-sm text-white/75">Waiting for group members…</p></div> : null}
+          </div>
           {call.direction === "incoming" && call.status === "ringing" ? null : <div className="absolute bottom-24 right-5 z-10 flex aspect-video w-36 items-center justify-center overflow-hidden rounded-2xl border border-white/30 bg-neutral-900 shadow-lg sm:w-52">
-            <video ref={localVideoRef} autoPlay muted playsInline className={`h-full w-full object-cover ${call.cameraOff ? "hidden" : ""}`} />
-            {call.cameraOff ? <Avatar subject={{ avatar_url: self?.avatar_url ?? null, display_name: self?.display_name ?? self?.username ?? "You" }} size={76} showOnline={false} /> : null}
+            {call.cameraOff ? <Avatar subject={{ avatar_url: self?.avatar_url ?? null, display_name: self?.display_name ?? self?.username ?? "You" }} size={76} showOnline={false} /> : <video ref={localVideoRef} autoPlay muted playsInline className="h-full w-full object-cover" />}
+            <span className="absolute bottom-2 left-2 rounded-full bg-black/45 px-2 py-0.5 text-xs">You</span>
           </div>}
+          <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/35 via-transparent to-black/45" />
+          <div className="absolute left-5 top-5 z-10"><h2 className="text-xl font-semibold">{call.peerName}</h2><p className="text-sm text-white/80">{call.status === "active" ? duration : call.direction === "incoming" ? `Incoming ${call.isGroup ? "group " : ""}video call` : call.status === "connecting" ? "Connecting…" : "Calling…"}</p></div>
+          {audioNeedsInteraction ? <button onClick={() => void enableCallAudio()} className="absolute left-1/2 top-5 z-20 -translate-x-1/2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-black shadow-lg hover:bg-white/90">Tap to enable audio</button> : null}
           <div className="absolute bottom-6 left-1/2 z-20 flex -translate-x-1/2 items-center gap-4 rounded-full bg-black/45 px-5 py-3 backdrop-blur-md">
-            {call.direction === "incoming" && call.status === "ringing" ? <><button onClick={declineOrEnd} aria-label="Decline call" className="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 hover:bg-red-700"><PhoneOff size={22} /></button><button onClick={() => void acceptCall()} aria-label="Answer video call" className="flex h-14 w-14 items-center justify-center rounded-full bg-green-600 hover:bg-green-700"><Video size={22} /></button></> : <><button onClick={toggleMute} aria-label={call.muted ? "Unmute microphone" : "Mute microphone"} className="flex h-12 w-12 items-center justify-center rounded-full bg-white/15 hover:bg-white/25">{call.muted ? <MicOff size={21} /> : <Mic size={21} />}</button><button onClick={toggleCamera} aria-label={call.cameraOff ? "Turn camera on" : "Turn camera off"} className="flex h-12 w-12 items-center justify-center rounded-full bg-white/15 hover:bg-white/25">{call.cameraOff ? <CameraOff size={21} /> : <Camera size={21} />}</button><button onClick={declineOrEnd} aria-label="End call" className="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 hover:bg-red-700"><PhoneOff size={22} /></button></>}
+            {call.direction === "incoming" && call.status === "ringing" ? <><button onClick={declineOrEnd} aria-label="Decline call" className="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 hover:bg-red-700"><PhoneOff size={22} /></button><button onClick={() => void acceptCall()} aria-label="Answer video call" className="flex h-14 w-14 items-center justify-center rounded-full bg-green-600 hover:bg-green-700"><Video size={22} /></button></> : <><button onClick={toggleMute} aria-label={call.muted ? "Unmute microphone" : "Mute microphone"} className="flex h-12 w-12 items-center justify-center rounded-full bg-white/15 hover:bg-white/25">{call.muted ? <MicOff size={21} /> : <Mic size={21} />}</button><button onClick={toggleCamera} aria-label={call.cameraOff ? "Turn camera on" : "Turn camera off"} className="flex h-12 w-12 items-center justify-center rounded-full bg-white/15 hover:bg-white/25">{call.cameraOff ? <CameraOff size={21} /> : <Camera size={21} />}</button><button onClick={declineOrEnd} aria-label="Leave call" className="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 hover:bg-red-700"><PhoneOff size={22} /></button></>}
           </div>
         </section>
       </div> : call ? <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm" role="presentation">
         <section role="dialog" aria-modal="true" aria-label="Voice call" className="w-full max-w-sm rounded-3xl border p-7 text-center shadow-2xl" style={{ backgroundColor: "var(--color-bg-primary)", borderColor: "var(--color-border-subtle)" }}>
-          <div className="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full ring-4 ring-[var(--color-bg-tertiary)]" style={{ boxShadow: call.status === "active" ? "0 0 0 6px rgb(22 163 74 / 15%)" : undefined }}>
-            <Avatar subject={{ avatar_url: call.peerAvatarUrl, display_name: call.peerName }} size={88} showOnline={false} />
-          </div>
+          {call.isGroup ? <div className="mx-auto mb-4 flex -space-x-3 justify-center">{remoteParticipants.slice(0, 4).map((participant) => <Avatar key={participant.id} subject={{ avatar_url: participant.avatarUrl, display_name: participant.displayName }} size={52} showOnline={false} />)}</div> : <div className="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full ring-4 ring-[var(--color-bg-tertiary)]" style={{ boxShadow: call.status === "active" ? "0 0 0 6px rgb(22 163 74 / 15%)" : undefined }}><Avatar subject={{ avatar_url: call.peerAvatarUrl, display_name: call.peerName }} size={88} showOnline={false} /></div>}
           <h2 className="text-xl font-semibold text-[var(--color-fg-primary)]">{call.peerName}</h2>
-          <p className="mt-1 text-sm text-[var(--color-fg-secondary)]">{call.status === "active" ? duration : call.direction === "incoming" ? "Incoming voice call" : call.status === "connecting" ? "Connecting…" : "Calling…"}</p>
+          <p className="mt-1 text-sm text-[var(--color-fg-secondary)]">{call.status === "active" ? duration : call.direction === "incoming" ? `Incoming ${call.isGroup ? "group " : ""}voice call` : call.status === "connecting" ? "Connecting…" : "Calling…"}</p>
+          {call.isGroup && remoteParticipants.length ? <div className="mt-4 flex flex-wrap justify-center gap-2">{remoteParticipants.map((participant) => <span key={participant.id} className="rounded-full bg-[var(--color-bg-tertiary)] px-3 py-1 text-xs text-[var(--color-fg-secondary)]">{participant.displayName}</span>)}</div> : null}
+          {audioNeedsInteraction ? <button onClick={() => void enableCallAudio()} className="mt-5 rounded-full bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-white">Tap to enable audio</button> : null}
           <div className="mt-8 flex items-center justify-center gap-5">
-            {call.direction === "incoming" && call.status === "ringing" ? <>
-              <button onClick={declineOrEnd} aria-label="Decline call" className="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 text-white hover:bg-red-700"><PhoneOff size={22} /></button>
-              <button onClick={() => void acceptCall()} aria-label="Answer call" className="flex h-14 w-14 items-center justify-center rounded-full bg-green-600 text-white hover:bg-green-700"><Phone size={22} /></button>
-            </> : <>
-              <button onClick={toggleMute} aria-label={call.muted ? "Unmute microphone" : "Mute microphone"} className="flex h-12 w-12 items-center justify-center rounded-full text-[var(--color-fg-primary)] hover:bg-[var(--color-bg-tertiary)]"><span className="sr-only">{call.muted ? "Unmute" : "Mute"}</span>{call.muted ? <MicOff size={21} /> : <Mic size={21} />}</button>
-              <button onClick={declineOrEnd} aria-label="End call" className="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 text-white hover:bg-red-700"><PhoneOff size={22} /></button>
-            </>}
+            {call.direction === "incoming" && call.status === "ringing" ? <><button onClick={declineOrEnd} aria-label="Decline call" className="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 text-white hover:bg-red-700"><PhoneOff size={22} /></button><button onClick={() => void acceptCall()} aria-label="Answer call" className="flex h-14 w-14 items-center justify-center rounded-full bg-green-600 text-white hover:bg-green-700"><Phone size={22} /></button></> : <><button onClick={toggleMute} aria-label={call.muted ? "Unmute microphone" : "Mute microphone"} className="flex h-12 w-12 items-center justify-center rounded-full text-[var(--color-fg-primary)] hover:bg-[var(--color-bg-tertiary)]">{call.muted ? <MicOff size={21} /> : <Mic size={21} />}</button><button onClick={declineOrEnd} aria-label="Leave call" className="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 text-white hover:bg-red-700"><PhoneOff size={22} /></button></>}
           </div>
         </section>
       </div> : null}

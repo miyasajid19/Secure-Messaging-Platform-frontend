@@ -44,12 +44,18 @@ export interface CallSignal {
   conversation_id?: number;
   from_user_id?: number;
   to_user_id?: number;
+  to_user_ids?: number[];
   from_name?: string;
   from_avatar_url?: string | null;
   media_type?: "audio" | "video";
   camera_off?: boolean;
   duration_seconds?: number;
   reason?: string;
+  is_group?: boolean;
+  group_name?: string;
+  caller_id?: number;
+  active?: boolean;
+  participants?: Array<{ id: number; display_name: string; avatar_url: string | null }>;
   message?: string;
   description?: RTCSessionDescriptionInit;
   candidate?: RTCIceCandidateInit | null;
@@ -320,6 +326,7 @@ function route(msg: IncomingMessage) {
   }
   switch (msg.type) {
     case "presence.snapshot":
+      useRealtimeStore.getState().clearAllActiveGroupCalls();
       handlePresenceSnapshot(msg as unknown as PresenceSnapshot);
       break;
     case "presence":

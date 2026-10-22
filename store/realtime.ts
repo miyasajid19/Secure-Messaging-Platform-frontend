@@ -12,6 +12,15 @@
 
 import { create } from "zustand";
 
+export interface ActiveGroupCall {
+  call_id: string;
+  conversation_id: number;
+  group_name: string;
+  media_type: "audio" | "video";
+  caller_id: number;
+  participants: Array<{ id: number; display_name: string; avatar_url: string | null }>;
+}
+
 interface RealtimeState {
   typingByConversation: Record<number, Record<number, true>>;
   presenceByUser: Record<number, boolean>;
@@ -23,6 +32,7 @@ interface RealtimeState {
    * (Phase 5 race). Phase 6 spec §1.
    */
   wsReady: boolean;
+  activeGroupCalls: Record<number, ActiveGroupCall>;
 
   // typing
   setTypingStart: (conversationId: number, userId: number) => void;
@@ -36,6 +46,9 @@ interface RealtimeState {
 
   // ws lifecycle
   setWsReady: (ready: boolean) => void;
+  setActiveGroupCall: (call: ActiveGroupCall) => void;
+  clearActiveGroupCall: (conversationId: number, callId?: string) => void;
+  clearAllActiveGroupCalls: () => void;
 
   clear: () => void;
 }
@@ -44,6 +57,7 @@ export const useRealtimeStore = create<RealtimeState>((set, get) => ({
   typingByConversation: {},
   presenceByUser: {},
   wsReady: false,
+  activeGroupCalls: {},
 
   setTypingStart: (conversationId, userId) => {
     set((s) => ({
@@ -113,11 +127,22 @@ export const useRealtimeStore = create<RealtimeState>((set, get) => ({
     set({ wsReady: ready });
   },
 
+  setActiveGroupCall: (call) => set((state) => ({ activeGroupCalls: { ...state.activeGroupCalls, [call.conversation_id]: call } })),
+  clearActiveGroupCall: (conversationId, callId) => set((state) => {
+    const active = state.activeGroupCalls[conversationId];
+    if (!active || (callId && active.call_id !== callId)) return state;
+    const activeGroupCalls = { ...state.activeGroupCalls };
+    delete activeGroupCalls[conversationId];
+    return { activeGroupCalls };
+  }),
+  clearAllActiveGroupCalls: () => set({ activeGroupCalls: {} }),
+
   clear: () => {
     set(() => ({
       typingByConversation: {},
       presenceByUser: {},
       wsReady: false,
+      activeGroupCalls: {},
     }));
   },
 }));
