@@ -15,6 +15,7 @@ import { Avatar } from "@/components/avatar";
 import { useAuthStore } from "@/store/auth";
 import { getIceServers, type IceServer } from "@/lib/api";
 import { isRealtimeConnected, sendCallSignal, subscribeToCallSignals, type CallSignal } from "@/lib/realtime";
+import { saveCallHistoryEntry, type CallOutcome } from "@/lib/call-history";
 
 type CallState = {
   callId: string;
@@ -29,6 +30,7 @@ type CallState = {
   muted: boolean;
   cameraOff: boolean;
   peerCameraOff: boolean;
+  createdAt: number;
 };
 
 type VoiceCallContextValue = {
@@ -65,6 +67,22 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     callRef.current = next;
     setCall(next);
   }, []);
+
+  const logCall = useCallback((session: CallState, outcome: CallOutcome) => {
+    if (!self?.id) return;
+    saveCallHistoryEntry(self.id, {
+      callId: session.callId,
+      conversationId: session.conversationId,
+      peerId: session.peerId,
+      peerName: session.peerName,
+      peerAvatarUrl: session.peerAvatarUrl,
+      mediaType: session.mediaType,
+      direction: session.direction,
+      outcome,
+      timestamp: new Date(session.createdAt).toISOString(),
+      durationSeconds: session.startedAt ? Math.max(0, Math.floor((Date.now() - session.startedAt) / 1000)) : 0,
+    });
+  }, [self?.id]);
 
   const cleanup = useCallback(() => {
     const connection = peerConnectionRef.current;
@@ -165,7 +183,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     if (signal.type === "call.incoming") {
       if (!signal.call_id || !signal.conversation_id || !signal.from_user_id) return;
       if (callRef.current) {
-        sendCallSignal({ type: "call.reject", call_id: signal.call_id, conversation_id: signal.conversation_id, to_user_id: signal.from_user_id });
+        sendCallSignal({ type: "call.reject", call_id: signal.call_id, conversation_id: signal.conversation_id, to_user_id: signal.from_user_id, media_type: signal.media_type });
         return;
       }
       updateCall({
@@ -181,13 +199,18 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
         muted: false,
         cameraOff: false,
         peerCameraOff: false,
+        createdAt: Date.now(),
       });
       return;
     }
 
     if (signal.type === "call.error") {
       toast.error(signal.message || "Call request failed");
-      if (callRef.current?.status === "ringing") cleanup();
+      const currentCall = callRef.current;
+      if (currentCall?.status === "ringing") {
+        logCall(currentCall, "missed");
+        cleanup();
+      }
       return;
     }
     const current = callRef.current;
@@ -201,6 +224,16 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     if (["call.unavailable", "call.rejected", "call.cancelled", "call.ended", "call.peer_offline"].includes(signal.type)) {
       if (signal.type === "call.unavailable" || signal.type === "call.rejected") toast.info(signal.message || `${current.peerName} didn't answer`);
       if (signal.type === "call.peer_offline") toast.info(`${current.peerName} disconnected`);
+      const outcome: CallOutcome = current.startedAt
+        ? "completed"
+        : signal.type === "call.rejected"
+          ? "declined"
+          : signal.type === "call.cancelled" && current.direction === "incoming"
+            ? "missed"
+            : signal.type === "call.unavailable" || signal.type === "call.peer_offline" || signal.type === "call.ended"
+              ? "missed"
+              : "cancelled";
+      logCall(current, outcome);
       cleanup();
       return;
     }
@@ -252,7 +285,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
         catch { /* A late candidate can arrive after a call ends. */ }
       }
     }
-  }, [cleanup, createPeerConnection, flushCandidates, sendOffer, updateCall]);
+  }, [cleanup, createPeerConnection, flushCandidates, logCall, sendOffer, updateCall]);
 
   useEffect(() => subscribeToCallSignals((signal) => { void handleSignal(signal); }), [handleSignal]);
   useEffect(() => {
@@ -265,12 +298,15 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
         call_id: current.callId,
         conversation_id: current.conversationId,
         to_user_id: current.peerId,
+        media_type: current.mediaType,
+        reason: "timeout",
       });
+      logCall(current, "missed");
       cleanup();
       if (current.direction === "outgoing") toast.info("No answer");
     }, 30_000);
     return () => window.clearTimeout(timer);
-  }, [call, cleanup]);
+  }, [call, cleanup, logCall]);
 
   // Use Web Audio for a small local ringback/ringtone, so no external
   // sound file or extra dependency is needed. The effect is torn down
@@ -352,7 +388,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     }
     const session: CallState = {
       callId: crypto.randomUUID(), conversationId, peerId, peerName, peerAvatarUrl,
-      mediaType, direction: "outgoing", status: "ringing", startedAt: null, muted: false, cameraOff: false, peerCameraOff: false,
+      mediaType, direction: "outgoing", status: "ringing", startedAt: null, muted: false, cameraOff: false, peerCameraOff: false, createdAt: Date.now(),
     };
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: mediaType === "video" });
@@ -383,7 +419,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
       }
       updateCall({ ...current, status: "connecting" });
     } catch (error) {
-      sendCallSignal({ type: "call.reject", call_id: current.callId, conversation_id: current.conversationId, to_user_id: current.peerId });
+      sendCallSignal({ type: "call.reject", call_id: current.callId, conversation_id: current.conversationId, to_user_id: current.peerId, media_type: current.mediaType });
       cleanup();
       toast.error(error instanceof DOMException && error.name === "NotAllowedError" ? "Allow microphone access to answer" : "Couldn't answer the call");
     }
@@ -392,11 +428,19 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
   function declineOrEnd() {
     const current = callRef.current;
     if (!current) return;
+    const outcome: CallOutcome = current.startedAt
+      ? "completed"
+      : current.direction === "incoming"
+        ? "declined"
+        : "cancelled";
+    logCall(current, outcome);
     sendCallSignal({
       type: current.direction === "incoming" && current.status === "ringing" ? "call.reject" : current.status === "ringing" ? "call.cancel" : "call.end",
       call_id: current.callId,
       conversation_id: current.conversationId,
       to_user_id: current.peerId,
+      media_type: current.mediaType,
+      ...(current.status === "active" && current.startedAt ? { duration_seconds: Math.floor((Date.now() - current.startedAt) / 1000) } : {}),
     });
     cleanup();
   }

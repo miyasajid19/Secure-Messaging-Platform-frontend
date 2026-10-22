@@ -17,7 +17,6 @@ import {
   Settings,
 } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
-import { toast } from "sonner";
 
 type RailKey = "chats" | "calls" | "stories";
 
@@ -54,7 +53,9 @@ export function LeftRail({ onHide }: { onHide: () => void }) {
           {railIcons.map(({ key, label, Icon }) => {
             const isActive = key === "chats"
               ? pathname === "/chat" || pathname === "/"
-              : key === "stories" && pathname.startsWith("/stories");
+              : key === "calls"
+                ? pathname.startsWith("/calls")
+                : key === "stories" && pathname.startsWith("/stories");
             return (
               <li key={key}>
                 <button
@@ -63,10 +64,7 @@ export function LeftRail({ onHide }: { onHide: () => void }) {
                   aria-current={isActive ? "page" : undefined}
                   title={label}
                   onClick={() => {
-                    if (key === "calls") {
-                      toast.info(`${label} — coming soon`);
-                      return;
-                    }
+                    if (key === "calls") { router.push("/calls"); return; }
                     if (key === "stories") { router.push("/stories"); return; }
                     if (key === "chats") router.push("/chat");
                   }}
