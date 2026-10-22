@@ -149,14 +149,10 @@ export function FloatingLoginWidget() {
       </button>
 
       <h3 className="mb-1 pr-6 text-sm font-semibold text-[var(--color-fg-primary)]">
-        Try the live demo
+        Sign in with your phone
       </h3>
       <p className="mb-3 text-xs leading-relaxed text-[var(--color-fg-secondary)]">
-        Sign in with any phone — OTP is always{" "}
-        <code className="rounded bg-[var(--color-bg-secondary)] px-1 py-0.5 font-mono text-[11px] text-[var(--color-fg-primary)]">
-          123456
-        </code>
-        .
+        We’ll text you a Firebase verification code.
       </p>
       <Link
         href="/auth/phone"

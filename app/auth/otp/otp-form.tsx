@@ -8,8 +8,7 @@
  * auth store, then routes to `/onboarding` if the user still needs to
  * pick a display name, or `/` otherwise.
  *
- * The demo OTP hint is visible in production so visitors can complete
- * the seeded-account sign-in without a real SMS provider.
+ * Firebase verifies the SMS code before the backend issues its app JWT.
  *
  * This component is rendered inside a `<Suspense>` boundary by the
  * parent `page.tsx` because it calls `useSearchParams`, which would
@@ -23,8 +22,6 @@ import { KeyRound } from "lucide-react";
 import { AuthCard, AuthButton, AuthTextInput } from "@/components/auth/auth-card";
 import { verifyOtp, ApiError } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
-
-const MOCK_OTP = "123456";
 
 export function OtpForm() {
   const router = useRouter();
@@ -49,13 +46,20 @@ export function OtpForm() {
     }
     setSubmitting(true);
     try {
-      const { token, user } = await verifyOtp(phone, trimmed);
+      const sessionInfo = sessionStorage.getItem("phone-otp-session");
+      const requestedPhone = sessionStorage.getItem("phone-otp-number");
+      if (!sessionInfo || requestedPhone !== phone) {
+        throw new Error("This verification session expired. Request a new code.");
+      }
+      const { token, user } = await verifyOtp(phone, sessionInfo, trimmed);
+      sessionStorage.removeItem("phone-otp-session");
+      sessionStorage.removeItem("phone-otp-number");
       setAuth(token, user);
       // Phase 9.5 — chat shell moved to /chat. Push new users to
       // onboarding, existing users directly into the chat.
       router.push(user.display_name && user.username ? "/chat" : "/onboarding");
     } catch (error) {
-      const message = error instanceof ApiError ? error.message : "Invalid code";
+      const message = error instanceof ApiError ? error.message : error instanceof Error ? error.message : "Couldn't verify the code";
       toast.error(message);
       setOtp("");
     } finally {
@@ -105,7 +109,7 @@ export function OtpForm() {
               autoComplete="one-time-code"
               maxLength={6}
               autoFocus
-              placeholder="123456"
+              placeholder="Enter SMS code"
               value={otp}
               onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))}
               disabled={submitting}
@@ -118,14 +122,6 @@ export function OtpForm() {
         <AuthButton type="submit" disabled={submitting || otp.length === 0}>
           {submitting ? "Verifying…" : "Verify"}
         </AuthButton>
-        <button
-          type="button"
-          onClick={() => setOtp(MOCK_OTP)}
-          className="text-xs text-[var(--color-fg-muted)] hover:text-[var(--color-fg-secondary)]"
-          disabled={submitting}
-        >
-          Use demo code {MOCK_OTP}
-        </button>
       </form>
     </AuthCard>
   );

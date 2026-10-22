@@ -2,24 +2,17 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, MessageCircle, Phone, ShieldCheck } from "lucide-react";
+import { ArrowRight, MessageCircle } from "lucide-react";
 import { toast } from "sonner";
-import { ApiError, requestOtp } from "@/lib/api";
+import { firebasePhoneError, getPhoneAuthRecaptchaToken } from "@/lib/firebase-auth";
+import { requestOtp, ApiError } from "@/lib/api";
+import { isValidPhoneNumber } from "@/lib/phone";
 import { useAuthStore } from "@/store/auth";
-
-const DEMO_ACCOUNTS = [
-  { name: "Sajid Miya", phone: "+919000000001" },
-  { name: "Aasif Miya", phone: "+919000000002" },
-  { name: "Ajmal Miya", phone: "+919000000003" },
-  { name: "Sajjan Karn", phone: "+919000000004" },
-  { name: "Sakshyam Pokhrel", phone: "+919000000005" },
-  { name: "Raman Shrestha", phone: "+919000000006" },
-] as const;
+import { PhoneNumberInput } from "@/components/auth/phone-number-input";
 
 export default function SignInPage() {
   const router = useRouter();
   const [phone, setPhone] = useState("");
-  const [selectedPhone, setSelectedPhone] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const token = useAuthStore((state) => state.token);
   const user = useAuthStore((state) => state.user);
@@ -33,17 +26,20 @@ export default function SignInPage() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmed = phone.trim();
-    if (!trimmed) {
-      toast.error("Enter a phone number to continue");
+    if (!isValidPhoneNumber(trimmed)) {
+      toast.error("Enter a valid phone number with country code, such as +919876543210.");
       return;
     }
 
     setSubmitting(true);
     try {
-      await requestOtp(trimmed);
+      const recaptchaToken = await getPhoneAuthRecaptchaToken("phone-signin-recaptcha");
+      const { session_info } = await requestOtp(trimmed, recaptchaToken);
+      sessionStorage.setItem("phone-otp-session", session_info);
+      sessionStorage.setItem("phone-otp-number", trimmed);
       router.push(`/auth/otp?phone=${encodeURIComponent(trimmed)}`);
     } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "Couldn't start sign-in");
+      toast.error(error instanceof ApiError ? error.message : firebasePhoneError(error));
     } finally {
       setSubmitting(false);
     }
@@ -75,97 +71,33 @@ export default function SignInPage() {
             Sign in to your chats
           </h1>
           <p className="mx-auto mt-2 max-w-xs text-sm leading-6 text-[var(--color-fg-secondary)]">
-            Choose a seeded account or enter a phone number to continue.
+            Enter your phone number to continue.
           </p>
         </header>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          <label htmlFor="phone" className="text-sm font-medium text-[var(--color-fg-primary)]">
+          <label className="text-sm font-medium text-[var(--color-fg-primary)]">
             Phone number
           </label>
-          <div className="relative -mt-2">
-            <Phone
-              className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--color-fg-muted)]"
-              size={17}
-              aria-hidden
-            />
-            <input
-              id="phone"
-              type="tel"
-              inputMode="tel"
-              autoComplete="tel"
-              autoFocus
-              required
-              value={phone}
-              onChange={(event) => {
-                setPhone(event.target.value);
-                setSelectedPhone(null);
-              }}
-              placeholder="+91 90000 00001"
-              disabled={submitting}
-              className="min-h-12 w-full rounded-xl border bg-[var(--color-bg-primary)] py-2 pl-10 pr-3 text-base text-[var(--color-fg-primary)] outline-none transition focus:border-[var(--color-accent)] focus:ring-4 focus:ring-blue-500/10 disabled:opacity-60"
-              style={{ borderColor: "var(--color-border-default)" }}
-            />
-          </div>
+          <PhoneNumberInput
+            id="phone"
+            value={phone}
+            onChange={setPhone}
+            disabled={submitting}
+            autoFocus
+          />
           <button
             type="submit"
-            disabled={submitting || !phone.trim()}
+          disabled={submitting || !isValidPhoneNumber(phone.trim())}
             className="mt-1 inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-[var(--color-accent)] px-4 py-3 text-sm font-semibold text-white transition hover:brightness-105 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/20 disabled:cursor-not-allowed disabled:opacity-55"
           >
             {submitting ? "Continuing…" : "Continue"}
             {!submitting ? <ArrowRight size={16} aria-hidden /> : null}
           </button>
         </form>
-
-        <div className="my-6 flex items-center gap-3" aria-hidden>
-          <span className="h-px flex-1 bg-[var(--color-border-subtle)]" />
-          <span className="text-[11px] font-medium text-[var(--color-fg-muted)]">DEMO ACCOUNTS</span>
-          <span className="h-px flex-1 bg-[var(--color-border-subtle)]" />
-        </div>
-
-        <ul className="grid grid-cols-2 gap-2" aria-label="Seeded demo accounts">
-          {DEMO_ACCOUNTS.map((account) => {
-            const selected = selectedPhone === account.phone;
-            return (
-              <li key={account.phone}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPhone(account.phone);
-                    setSelectedPhone(account.phone);
-                  }}
-                  disabled={submitting}
-                  aria-pressed={selected}
-                  className={`flex min-h-[58px] w-full flex-col items-start justify-center rounded-xl border px-3 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ${
-                    selected
-                      ? "border-[var(--color-accent)]"
-                      : "border-[var(--color-border-subtle)] hover:bg-[var(--color-bg-secondary)]"
-                  }`}
-                  style={
-                    selected
-                      ? {
-                          backgroundColor:
-                            "color-mix(in srgb, var(--color-accent) 9%, var(--color-bg-primary))",
-                        }
-                      : undefined
-                  }
-                >
-                  <span className="text-xs font-semibold text-[var(--color-fg-primary)]">{account.name}</span>
-                  <span className="mt-0.5 text-[11px] text-[var(--color-fg-muted)]">{account.phone}</span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-
-        <div className="mt-4 flex items-center justify-center gap-2 rounded-xl bg-[var(--color-bg-secondary)] px-3 py-2.5 text-xs text-[var(--color-fg-secondary)]">
-          <ShieldCheck size={15} className="shrink-0 text-[var(--color-accent)]" aria-hidden />
-          <span>Demo verification code</span>
-          <code className="rounded-md bg-[var(--color-bg-primary)] px-1.5 py-0.5 font-semibold tracking-[0.16em] text-[var(--color-fg-primary)]">123456</code>
-        </div>
-
-        <p className="mt-5 text-center text-[11px] leading-5 text-[var(--color-fg-muted)]">
-          No SMS is sent. This demo uses seeded conversations and a fixed code.
+        <div id="phone-signin-recaptcha" />
+        <p className="mt-3 text-center text-[11px] leading-5 text-[var(--color-fg-muted)]">
+          Firebase will send a verification code by SMS.
         </p>
       </section>
     </main>

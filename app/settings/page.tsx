@@ -32,12 +32,15 @@ import {
   User as UserIcon,
 } from "lucide-react";
 import { toast } from "sonner";
-import { ApiError, changePhone, getMe, requestPhoneChangeOtp, updateProfile, uploadImage, type User } from "@/lib/api";
+import { ApiError, changePhone, getMe, requestOtp, updateProfile, uploadImage, type User } from "@/lib/api";
+import { firebasePhoneError, getPhoneAuthRecaptchaToken } from "@/lib/firebase-auth";
+import { isValidPhoneNumber } from "@/lib/phone";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/store/auth";
 import { queryKeys } from "@/lib/api";
 import { useNotificationSound } from "@/lib/notification-sound";
 import { Avatar } from "@/components/avatar";
+import { PhoneNumberInput } from "@/components/auth/phone-number-input";
 
 type Section =
   | "account"
@@ -400,6 +403,7 @@ function AccountPanel() {
   const [phoneDraft, setPhoneDraft] = useState("");
   const [phoneOtp, setPhoneOtp] = useState("");
   const [phoneOtpRequested, setPhoneOtpRequested] = useState(false);
+  const [phoneOtpSession, setPhoneOtpSession] = useState("");
   const [phoneBusy, setPhoneBusy] = useState(false);
 
   useEffect(() => {
@@ -459,17 +463,19 @@ function AccountPanel() {
 
   async function requestPhoneCode() {
     const phone = phoneDraft.trim();
-    if (!/^\+[1-9]\d{1,14}$/.test(phone)) {
+    if (!isValidPhoneNumber(phone)) {
       toast.error("Enter a valid phone number with country code");
       return;
     }
     setPhoneBusy(true);
     try {
-      const response = await requestPhoneChangeOtp(phone);
+      const recaptchaToken = await getPhoneAuthRecaptchaToken("settings-phone-recaptcha");
+      const { session_info } = await requestOtp(phone, recaptchaToken);
+      setPhoneOtpSession(session_info);
       setPhoneOtpRequested(true);
-      toast.success(response.sent ? `Verification code: ${response.debug_otp}` : "Couldn't request a code");
+      toast.success(`Verification code sent to ${phone}`);
     } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "Couldn't request verification code");
+      toast.error(firebasePhoneError(error));
     } finally { setPhoneBusy(false); }
   }
 
@@ -477,14 +483,16 @@ function AccountPanel() {
     event.preventDefault();
     setPhoneBusy(true);
     try {
-      const response = await changePhone(phoneDraft.trim(), phoneOtp.trim());
+      const phone = phoneDraft.trim();
+      const response = await changePhone(phone, phoneOtpSession, phoneOtp.trim());
       useAuthStore.getState().setAuth(response.token, response.user);
       void queryClient.setQueryData(queryKeys.me, response.user);
       setPhoneOtpRequested(false);
+      setPhoneOtpSession("");
       setPhoneOtp("");
       toast.success("Phone number updated");
     } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "Couldn't update phone number");
+      toast.error(error instanceof ApiError ? error.message : firebasePhoneError(error));
     } finally { setPhoneBusy(false); }
   }
 
@@ -540,14 +548,11 @@ function AccountPanel() {
           <p className="mt-1 text-xs text-[var(--color-fg-muted)]">Changing your number requires a verification code.</p>
         </div>
         <Field label="Phone">
-        <input
-          type="tel"
+        <PhoneNumberInput
+          id="settings-phone"
           value={phoneDraft}
-          onChange={(event) => { setPhoneDraft(event.target.value); setPhoneOtpRequested(false); }}
+          onChange={(value) => { setPhoneDraft(value); setPhoneOtpRequested(false); }}
           disabled={phoneBusy}
-          className="min-h-11 w-full rounded-lg border bg-[var(--color-bg-secondary)] px-3 text-sm text-[var(--color-fg-primary)] outline-none focus:ring-2 focus:ring-[var(--color-accent)]"
-          style={{ borderColor: "var(--color-border-subtle)" }}
-          aria-label="Phone number"
         />
         {phoneDraft.trim() !== currentUser.phone ? (
           phoneOtpRequested ? (
@@ -557,6 +562,7 @@ function AccountPanel() {
             </form>
           ) : <button type="button" onClick={() => void requestPhoneCode()} disabled={phoneBusy} className="mt-2 min-h-11 rounded-lg border px-3 text-sm text-[var(--color-fg-primary)] disabled:opacity-50" style={{ borderColor: "var(--color-border-subtle)" }}>{phoneBusy ? "Requesting…" : "Verify new number"}</button>
         ) : null}
+        <div id="settings-phone-recaptcha" />
         </Field>
       </section>
       <div>

@@ -7,7 +7,7 @@ Next.js 16 (App Router) + TypeScript + Tailwind v4 + Zustand + TanStack Query. T
 A pixel-aware Signal Messenger clone for the desktop browser:
 
 - **Public landing** at `/` — project description, features grid, screenshots, social links, floating "Try the live demo" widget.
-- **Mocked-OTP auth** — phone + `123456` → JWT in `localStorage`. No SMS.
+- **Firebase Phone Authentication** — the browser supplies Firebase reCAPTCHA proof; the backend requests the SMS and verifies the OTP through Firebase before issuing the app JWT.
 - **Real-time chat** — three-pane shell (left rail / conversation list / chat pane). WebSocket-driven messages, typing indicators, presence, read receipts.
 - **Direct + group conversations** — create groups, add/remove members, admin controls.
 - **Bonus features** — reply/quoted messages, emoji reactions (Messenger-style "seen by" avatar stack on outgoing group bubbles), per-conversation disappearing-message timers, image attachments, dark mode toggle.
@@ -94,17 +94,19 @@ The deploy artefacts live next to `package.json`:
 2. Set the **Root Directory** to `frontend` (so Vercel finds `package.json`
    and the in-tree `vercel.json`).
 3. Framework preset: Next.js (auto-detected).
-4. When Vercel prompts for the env vars declared in `vercel.json`,
-   supply:
+4. In Vercel Project Settings → Environment Variables, add:
    - `NEXT_PUBLIC_API_URL` — e.g. `https://your-app.up.railway.app`
    - `NEXT_PUBLIC_WS_URL` — e.g. `wss://your-app.up.railway.app/ws`
-5. Deploy. `next.config.ts` keeps the experimental `cacheComponents` and
+   - `NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`, `NEXT_PUBLIC_FIREBASE_PROJECT_ID`, `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET`, `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID`, and `NEXT_PUBLIC_FIREBASE_APP_ID` — from your Firebase web app configuration.
+   - Also set `FIREBASE_PROJECT_ID` on the backend to the same project ID.
+5. In Firebase Console, enable Phone sign-in and add the Vercel domain under Authentication → Settings → Authorized domains.
+6. Deploy. `next.config.ts` keeps the experimental `cacheComponents` and
    `partialPrefetching` flags that the Vercel runtime supports.
 
 ### Verify a live deploy
 1. Open the deployed URL → landing page renders with the floating widget.
 2. Click **Try the demo** → `/auth/phone`.
-3. Enter `+15550000001`, continue, OTP auto-fills to `123456` (or type it), verify.
+3. Enter your E.164 phone number, complete Firebase's reCAPTCHA, then enter the SMS code.
 4. Land on `/chat` with Alice's seeded conversations.
 5. Click into a direct conversation, send a message.
 6. Open a second window, log in as Bob (`+15550000002`), send a message back → should appear on Alice's side within 1 s.
@@ -119,6 +121,13 @@ All vars are client-visible (`NEXT_PUBLIC_*`) — keep secrets on the server. `l
 |---|---|---|
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | `https://your-app.up.railway.app` |
 | `NEXT_PUBLIC_WS_URL` | `ws://localhost:8000/ws` | `wss://your-app.up.railway.app/ws` |
+| `NEXT_PUBLIC_FIREBASE_API_KEY` | from Firebase web config | same Firebase project |
+| `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` | from Firebase web config | same Firebase project |
+| `NEXT_PUBLIC_FIREBASE_PROJECT_ID` | from Firebase web config | same Firebase project |
+| `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET` | from Firebase web config | same Firebase project |
+| `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID` | from Firebase web config | same Firebase project |
+| `NEXT_PUBLIC_FIREBASE_APP_ID` | from Firebase web config | same Firebase project |
+| `NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID` | optional | same Firebase project |
 
 Always import via `import { env } from "@/lib/env"` — never read `process.env` ad hoc. The `lib/env.ts` module exports `apiUrl` and `wsUrl`.
 
@@ -128,15 +137,15 @@ Always import via `import { env } from "@/lib/env"` — never read `process.env`
 |---|---|---|
 | `/` | — | Public landing page |
 | `/auth/phone` | — | Phone entry |
-| `/auth/otp?phone=…` | — | OTP entry (auto-fills `123456` in dev) |
+| `/auth/otp?phone=…` | — | Enter the Firebase SMS verification code |
 | `/onboarding` | ✅ | First-time profile setup (display name) |
 | `/chat` | ✅ | Three-pane chat shell |
 | `/settings?section=…` | ✅ | Account / Privacy / Notifications / Appearance |
 
 ## Authentication flow
 
-1. `/auth/phone` — user enters phone → `POST /auth/request-otp` (upserts the user) → router pushes to `/auth/otp?phone=…`.
-2. `/auth/otp` — user enters OTP (or clicks "Use 123456 (dev)") → `POST /auth/verify-otp` → token + user object → `setAuth(token, user)` → if `user.display_name` is null, push to `/onboarding`; else push to `/chat`.
+1. `/auth/phone` — user enters a valid E.164 phone → browser gets Firebase reCAPTCHA proof → frontend asks backend to request the SMS → router pushes to `/auth/otp?phone=…`.
+2. `/auth/otp` — frontend submits the Firebase session and SMS code to `POST /auth/verify-otp` → backend validates the code with Firebase → app token + user object → `setAuth(token, user)` → onboarding or chat.
 3. After hydration, the WebSocket opens with `?token=${token}` in the query string.
 4. Logout (Settings menu or left-rail avatar popover) → `POST /auth/logout` (best-effort) → `useAuthStore.clear()` → router pushes to `/auth/phone`.
 

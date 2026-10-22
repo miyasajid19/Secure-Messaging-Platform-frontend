@@ -237,16 +237,16 @@ async function apiFetch<T>(
 
 // --- auth endpoints ---------------------------------------------------------
 
-export const requestOtp = (phone: string) =>
-  apiFetch<RequestOtpResponse>("/auth/request-otp", {
+export const requestOtp = (phone: string, recaptchaToken: string) =>
+  apiFetch<{ session_info: string }>("/auth/request-otp", {
     method: "POST",
-    body: { phone },
+    body: { phone, recaptcha_token: recaptchaToken },
   });
 
-export const verifyOtp = (phone: string, otp: string) =>
+export const verifyOtp = (phone: string, sessionInfo: string, code: string) =>
   apiFetch<VerifyOtpResponse>("/auth/verify-otp", {
     method: "POST",
-    body: { phone, otp },
+    body: { phone, session_info: sessionInfo, code },
   });
 
 export const getMe = () =>
@@ -258,16 +258,10 @@ export const updateProfile = (patch: ProfilePatch) =>
     body: patch,
   });
 
-export const requestPhoneChangeOtp = (phone: string) =>
-  apiFetch<RequestOtpResponse>("/auth/change-phone/request-otp", {
-    method: "POST",
-    body: { phone },
-  });
-
-export const changePhone = (phone: string, otp: string) =>
+export const changePhone = (phone: string, sessionInfo: string, code: string) =>
   apiFetch<VerifyOtpResponse>("/auth/change-phone", {
     method: "POST",
-    body: { phone, otp },
+    body: { phone, session_info: sessionInfo, code },
   });
 
 /** Upload an image through the authenticated backend/ImageKit route. */
@@ -309,11 +303,6 @@ export async function logout(): Promise<void> {
 }
 
 // --- Phase 4 read + contacts endpoints --------------------------------------
-
-export interface RequestOtpResponse {
-  sent: boolean;
-  debug_otp: string;
-}
 
 export interface VerifyOtpResponse {
   token: string;
