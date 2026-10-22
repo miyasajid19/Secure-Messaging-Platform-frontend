@@ -63,9 +63,9 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
   const [remoteStreams, setRemoteStreams] = useState<Record<number, MediaStream>>({});
   const [clock, setClock] = useState(0);
 
-useEffect(() => {
-  setClock(Date.now());
-}, []);
+  useEffect(() => {
+    setClock(Date.now());
+  }, []);
   const callRef = useRef<CallState | null>(null);
   const peerConnectionsRef = useRef(new Map<number, RTCPeerConnection>());
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -427,6 +427,7 @@ useEffect(() => {
 
   useEffect(() => {
     if (!call?.startedAt) return;
+    setClock(Date.now());
     const timer = window.setInterval(() => setClock(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [call?.startedAt]);
