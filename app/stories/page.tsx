@@ -1,16 +1,17 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Camera, ChevronLeft, ChevronRight, ImagePlus, LoaderCircle, Play, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
-import { ApiError, createStory, deleteStory, listStories, markStoryViewed, queryKeys, reactToStory, removeStoryReaction, uploadStoryMedia } from "@/lib/api";
+import { ApiError, createStoriesBatch, deleteStory, listStories, markStoryViewed, queryKeys, reactToStory, removeStoryReaction, uploadStoryMedia } from "@/lib/api";
 import { useAuthStore, selectIsAuthenticated } from "@/store/auth";
 import { Avatar } from "@/components/avatar";
 
 const STORY_BACKGROUNDS = ["#2563eb", "#7c3aed", "#db2777", "#ea580c", "#059669", "#111827"];
 const STORY_REACTIONS = ["❤️", "😂", "😮", "😢", "🔥", "👍"];
+type SelectedMedia = { file: File; preview: string };
 
 export default function StoriesPage() {
   const router = useRouter();
@@ -21,8 +22,7 @@ export default function StoriesPage() {
   const [composerOpen, setComposerOpen] = useState(false);
   const [caption, setCaption] = useState("");
   const [background, setBackground] = useState(STORY_BACKGROUNDS[0]);
-  const [media, setMedia] = useState<File | null>(null);
-  const [mediaPreview, setMediaPreview] = useState<string | null>(null);
+  const [media, setMedia] = useState<SelectedMedia[]>([]);
   const [active, setActive] = useState<{ groupIndex: number; storyIndex: number } | null>(null);
 
   useEffect(() => {
@@ -39,12 +39,16 @@ export default function StoriesPage() {
   const groups = storiesQuery.data ?? [];
   const createMutation = useMutation({
     mutationFn: async () => {
-      let uploaded: { url: string; media_type: "image" | "video" } | null = null;
-      if (media) uploaded = await uploadStoryMedia(media);
-      return createStory({ media_url: uploaded?.url ?? null, media_type: uploaded?.media_type ?? "image", text: caption.trim() || null, background });
+      const uploaded = await Promise.all(media.map(({ file }) => uploadStoryMedia(file)));
+      const common = { text: caption.trim() || null, background };
+      const stories = uploaded.length
+        ? uploaded.map((item) => ({ ...common, media_url: item.url, media_type: item.media_type }))
+        : [{ ...common, media_url: null, media_type: "image" as const }];
+      return createStoriesBatch(stories);
     },
     onSuccess: async () => {
-      setComposerOpen(false); setCaption(""); setMedia(null); setMediaPreview(null);
+      media.forEach(({ preview }) => URL.revokeObjectURL(preview));
+      setComposerOpen(false); setCaption(""); setMedia([]);
       await queryClient.invalidateQueries({ queryKey: queryKeys.stories });
       toast.success("Story shared");
     },
@@ -68,22 +72,42 @@ export default function StoriesPage() {
 
   const currentGroup = active ? groups[active.groupIndex] : null;
   const currentStory = currentGroup?.stories[active!.storyIndex] ?? null;
+  const publisherActivity = currentStory ? [
+    ...currentStory.viewers.map((viewer) => ({
+      ...viewer,
+      reaction: currentStory.reactions.find((item) => item.user_id === viewer.user_id)?.emoji ?? null,
+    })),
+    ...currentStory.reactions
+      .filter((reaction) => !currentStory.viewers.some((viewer) => viewer.user_id === reaction.user_id))
+      .map((reaction) => ({ ...reaction, viewed_at: null, reaction: reaction.emoji })),
+  ] : [];
   useEffect(() => {
     if (!currentStory || currentStory.user.id === currentUser?.id || currentStory.viewed_by_me) return;
     void markStoryViewed(currentStory.id).then(() => queryClient.invalidateQueries({ queryKey: queryKeys.stories })).catch(() => {});
   }, [currentStory?.id, currentStory?.user.id, currentStory?.viewed_by_me, currentUser?.id, queryClient]);
 
-  const totalStories = useMemo(() => groups.reduce((count, group) => count + group.stories.length, 0), [groups]);
+  const storyPeopleCount = groups.length;
   function openComposer() { setComposerOpen(true); }
-  function handleMedia(file: File | null) {
-    if (!file) return;
-    const isImage = file.type.startsWith("image/") && file.type !== "image/svg+xml";
-    const isVideo = ["video/mp4", "video/webm", "video/quicktime"].includes(file.type);
-    if (!isImage && !isVideo) { toast.error("Choose a photo or an MP4, WebM, or MOV video"); return; }
-    const limit = isVideo ? 50 * 1024 * 1024 : 5 * 1024 * 1024;
-    if (file.size > limit) { toast.error(`Keep ${isVideo ? "videos" : "photos"} under ${isVideo ? "50" : "5"} MB`); return; }
-    setMedia(file);
-    setMediaPreview(URL.createObjectURL(file));
+  function handleMedia(files: FileList | null) {
+    if (!files?.length) return;
+    const accepted: SelectedMedia[] = [];
+    for (const file of Array.from(files)) {
+      if (media.length + accepted.length >= 10) { toast.error("You can add up to 10 stories at a time"); break; }
+      const isImage = file.type.startsWith("image/") && file.type !== "image/svg+xml";
+      const isVideo = ["video/mp4", "video/webm", "video/quicktime"].includes(file.type);
+      if (!isImage && !isVideo) { toast.error(`${file.name}: choose a photo or MP4, WebM, or MOV video`); continue; }
+      const limit = isVideo ? 50 * 1024 * 1024 : 5 * 1024 * 1024;
+      if (file.size > limit) { toast.error(`${file.name}: keep ${isVideo ? "videos" : "photos"} under ${isVideo ? "50" : "5"} MB`); continue; }
+      accepted.push({ file, preview: URL.createObjectURL(file) });
+    }
+    if (accepted.length) setMedia((current) => [...current, ...accepted]);
+  }
+  function removeSelectedMedia(index: number) {
+    setMedia((current) => {
+      const item = current[index];
+      if (item) URL.revokeObjectURL(item.preview);
+      return current.filter((_, itemIndex) => itemIndex !== index);
+    });
   }
   function stepStory(direction: -1 | 1) {
     if (!active) return;
@@ -110,7 +134,7 @@ export default function StoriesPage() {
       </header>
 
       <section className="mx-auto max-w-5xl px-5 sm:px-8" aria-label="Active stories">
-        <div className="mb-4 flex items-center justify-between"><h2 className="text-sm font-semibold text-[var(--color-fg-primary)]">Recent updates</h2><span className="text-xs text-[var(--color-fg-muted)]">{totalStories} {totalStories === 1 ? "story" : "stories"}</span></div>
+        <div className="mb-4 flex items-center justify-between"><h2 className="text-sm font-semibold text-[var(--color-fg-primary)]">Recent updates</h2><span className="text-xs text-[var(--color-fg-muted)]">{storyPeopleCount} {storyPeopleCount === 1 ? "person" : "people"}</span></div>
         {storiesQuery.isLoading ? <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">{[0, 1, 2, 3].map((item) => <div key={item} className="h-48 animate-pulse rounded-2xl" style={{ backgroundColor: "var(--color-bg-tertiary)" }} />)}</div> : storiesQuery.error ? <div className="rounded-2xl border p-6 text-sm text-[var(--color-fg-secondary)]" style={{ borderColor: "var(--color-border-subtle)" }}>{storiesQuery.error instanceof ApiError ? storiesQuery.error.message : "Couldn't load stories."} <button onClick={() => void storiesQuery.refetch()} className="ml-2 font-semibold text-[var(--color-accent)]">Try again</button></div> : groups.length === 0 ? <div className="flex min-h-64 flex-col items-center justify-center rounded-3xl border border-dashed px-6 text-center" style={{ borderColor: "var(--color-border-subtle)" }}><div className="mb-4 rounded-full p-4 text-[var(--color-accent)]" style={{ backgroundColor: "var(--color-bg-primary)" }}><Camera size={24} /></div><h3 className="font-semibold text-[var(--color-fg-primary)]">No stories yet</h3><p className="mt-1 max-w-sm text-sm text-[var(--color-fg-secondary)]">Share a quick photo or note. It will be here for the next 24 hours.</p><button onClick={openComposer} className="mt-5 rounded-full px-4 py-2 text-sm font-semibold" style={{ backgroundColor: "var(--color-accent)", color: "var(--color-accent-fg)" }}>Share your first story</button></div> : <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">{groups.map((group, groupIndex) => {
           const latest = group.stories[group.stories.length - 1];
           return <button key={group.user.id} onClick={() => setActive({ groupIndex, storyIndex: 0 })} className="group relative h-48 overflow-hidden rounded-2xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] sm:h-60" style={{ backgroundColor: "var(--color-bg-tertiary)" }}>
@@ -125,10 +149,11 @@ export default function StoriesPage() {
 
       {composerOpen ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setComposerOpen(false); }}><section role="dialog" aria-modal="true" aria-labelledby="story-title" className="w-full max-w-md overflow-hidden rounded-3xl border shadow-2xl" style={{ backgroundColor: "var(--color-bg-primary)", borderColor: "var(--color-border-subtle)" }}>
         <header className="flex items-center justify-between border-b px-5 py-4" style={{ borderColor: "var(--color-border-subtle)" }}><div><h2 id="story-title" className="font-semibold text-[var(--color-fg-primary)]">Create a story</h2><p className="mt-0.5 text-xs text-[var(--color-fg-secondary)]">Visible for 24 hours</p></div><button onClick={() => setComposerOpen(false)} aria-label="Close" className="rounded-full p-2 hover:bg-[var(--color-bg-tertiary)]"><X size={18} /></button></header>
-        <div className="space-y-4 p-5"><div className="relative flex h-64 items-center justify-center overflow-hidden rounded-2xl px-6 text-center" style={{ backgroundColor: mediaPreview ? "#111" : background }}>{mediaPreview ? (media?.type.startsWith("video/") ? <video src={mediaPreview} muted playsInline controls className="absolute inset-0 h-full w-full object-contain" /> : <img src={mediaPreview} alt="Story preview" className="absolute inset-0 h-full w-full object-cover" />) : <p className="relative text-2xl font-semibold text-white">{caption.trim() || "Your note will appear here"}</p>}</div>
+        <div className="space-y-4 p-5"><div className="relative flex h-48 items-center justify-center overflow-hidden rounded-2xl px-6 text-center" style={{ backgroundColor: background }}>{media.length ? <div className="grid max-h-full w-full grid-cols-3 gap-2 overflow-y-auto p-2">{media.map((item, index) => <div key={`${item.file.name}-${index}`} className="relative aspect-[4/5] overflow-hidden rounded-xl bg-black/20">{item.file.type.startsWith("video/") ? <video src={item.preview} muted playsInline className="h-full w-full object-cover" /> : <img src={item.preview} alt={`Selected story ${index + 1}`} className="h-full w-full object-cover" />}<button type="button" onClick={() => removeSelectedMedia(index)} aria-label={`Remove ${item.file.name}`} className="absolute right-1 top-1 rounded-full bg-black/65 p-1.5 text-white transition hover:scale-110 hover:bg-black/85"><X size={14} /></button></div>)}</div> : <p className="relative text-2xl font-semibold text-white">{caption.trim() || "Your note will appear here"}</p>}</div>
           <textarea value={caption} onChange={(event) => setCaption(event.target.value)} maxLength={500} rows={3} placeholder="Add a caption or write a note…" className="w-full resize-none rounded-xl border bg-transparent px-3 py-2.5 text-sm text-[var(--color-fg-primary)] outline-none placeholder:text-[var(--color-fg-muted)] focus:border-[var(--color-accent)]" style={{ borderColor: "var(--color-border-subtle)" }} />
-          <div className="flex items-center justify-between gap-3"><label className="inline-flex cursor-pointer items-center gap-2 rounded-full border px-3 py-2 text-sm text-[var(--color-fg-primary)] hover:bg-[var(--color-bg-tertiary)]" style={{ borderColor: "var(--color-border-subtle)" }}><ImagePlus size={17} />{media ? "Change media" : "Add photo or video"}<input type="file" accept="image/*,video/mp4,video/webm,video/quicktime" className="sr-only" onChange={(event) => handleMedia(event.target.files?.[0] ?? null)} /></label>{media ? <button onClick={() => { setMedia(null); setMediaPreview(null); }} className="text-xs text-[var(--color-fg-secondary)] hover:underline">Remove media</button> : <div className="flex gap-1.5">{STORY_BACKGROUNDS.map((color) => <button key={color} onClick={() => setBackground(color)} aria-label={`Choose ${color} background`} className="h-6 w-6 rounded-full ring-offset-2" style={{ backgroundColor: color, outline: background === color ? `2px solid ${color}` : undefined }} />)}</div>}</div>
-          <button disabled={createMutation.isPending || (!caption.trim() && !media)} onClick={() => createMutation.mutate()} className="flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50" style={{ backgroundColor: "var(--color-accent)", color: "var(--color-accent-fg)" }}>{createMutation.isPending ? <><LoaderCircle size={17} className="animate-spin" /> Sharing…</> : "Share story"}</button>
+          <div className="flex items-center justify-between gap-3"><label className="inline-flex cursor-pointer items-center gap-2 rounded-full border px-3 py-2 text-sm text-[var(--color-fg-primary)] hover:bg-[var(--color-bg-tertiary)]" style={{ borderColor: "var(--color-border-subtle)" }}><ImagePlus size={17} />Add photos or videos<input type="file" multiple accept="image/*,video/mp4,video/webm,video/quicktime" className="sr-only" onChange={(event) => { handleMedia(event.target.files); event.currentTarget.value = ""; }} /></label><span className="text-xs text-[var(--color-fg-muted)]">{media.length}/10 selected</span>{media.length === 0 ? <div className="flex gap-1.5">{STORY_BACKGROUNDS.map((color) => <button key={color} onClick={() => setBackground(color)} aria-label={`Choose ${color} background`} className="h-6 w-6 rounded-full ring-offset-2" style={{ backgroundColor: color, outline: background === color ? `2px solid ${color}` : undefined }} />)}</div> : null}</div>
+          <p className="text-xs text-[var(--color-fg-muted)]">The caption will be added to each selected item.</p>
+          <button disabled={createMutation.isPending || (!caption.trim() && media.length === 0)} onClick={() => createMutation.mutate()} className="flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50" style={{ backgroundColor: "var(--color-accent)", color: "var(--color-accent-fg)" }}>{createMutation.isPending ? <><LoaderCircle size={17} className="animate-spin" /> Sharing {media.length || 1}…</> : `Share ${media.length || 1} ${media.length === 1 ? "story" : "stories"}`}</button>
         </div>
       </section></div> : null}
 
@@ -140,12 +165,16 @@ export default function StoriesPage() {
         {currentStory.media_type !== "video" ? <><button onClick={() => stepStory(-1)} aria-label="Previous story" className="absolute inset-y-20 left-0 w-1/3 cursor-pointer" /><button onClick={() => stepStory(1)} aria-label="Next story" className="absolute inset-y-20 right-0 w-1/3 cursor-pointer" /></> : null}
         <div className="absolute inset-x-0 bottom-4 z-10 flex flex-col items-center gap-2 px-4">
           {currentGroup.user.id === currentUser?.id ? (
-            currentStory.reactions.length > 0 ? <div className="flex max-h-32 w-full max-w-sm flex-wrap justify-center gap-1.5 overflow-y-auto rounded-2xl border border-white/15 bg-black/55 p-2.5 shadow-xl backdrop-blur-xl">
-              {currentStory.reactions.map((reaction) => (
-                <span key={reaction.user_id} className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-2.5 py-1 text-sm text-white">
-                  <span>{reaction.emoji}</span><span className="max-w-28 truncate">{reaction.display_name || reaction.username || "User"}</span>
-                </span>
-              ))}
+            publisherActivity.length > 0 ? <div className="w-full max-w-sm overflow-hidden rounded-2xl border border-white/15 bg-black/65 text-white shadow-xl backdrop-blur-xl">
+              <p className="border-b border-white/10 px-3 py-2 text-xs font-semibold text-white/75">Seen by {currentStory.view_count}</p>
+              <div className="max-h-40 overflow-y-auto p-1.5">
+                {publisherActivity.map((viewer) => <div key={viewer.user_id} className="flex items-center gap-2.5 rounded-xl px-2 py-1.5 hover:bg-white/10">
+                  <Avatar subject={{ avatar_url: viewer.avatar_url, display_name: viewer.display_name || viewer.username || "User" }} size={28} showOnline={false} />
+                  <span className="min-w-0 flex-1 truncate text-left text-sm">{viewer.display_name || viewer.username || "User"}</span>
+                  {viewer.viewed_at ? <time className="text-[11px] text-white/55">{new Date(viewer.viewed_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time> : null}
+                  {viewer.reaction ? <span className="text-lg" aria-label={`Reacted ${viewer.reaction}`}>{viewer.reaction}</span> : null}
+                </div>)}
+              </div>
             </div> : null
           ) : (
             <>

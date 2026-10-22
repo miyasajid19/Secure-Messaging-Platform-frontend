@@ -49,6 +49,7 @@ export interface Story {
   view_count: number;
   reaction_counts: Record<string, number>;
   reactions: Array<{ user_id: number; display_name: string | null; username: string | null; avatar_url: string | null; emoji: string }>;
+  viewers: Array<{ user_id: number; display_name: string | null; username: string | null; avatar_url: string | null; viewed_at: string }>;
   my_reaction: string | null;
 }
 
@@ -56,6 +57,8 @@ export interface StoryGroup { user: Story["user"]; stories: Story[] }
 export const listStories = () => apiFetch<StoryGroup[]>("/stories", { method: "GET" });
 export const createStory = (body: { media_url?: string | null; media_type?: "image" | "video"; text?: string | null; background?: string }) =>
   apiFetch<Story>("/stories", { method: "POST", body });
+export const createStoriesBatch = (stories: Array<{ media_url?: string | null; media_type?: "image" | "video"; text?: string | null; background?: string }>) =>
+  apiFetch<Story[]>("/stories/batch", { method: "POST", body: { stories } });
 export async function uploadStoryMedia(file: File): Promise<{ url: string; media_type: "image" | "video" }> {
   const form = new FormData();
   form.append("file", file);
