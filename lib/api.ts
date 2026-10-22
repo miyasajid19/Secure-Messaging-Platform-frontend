@@ -40,20 +40,45 @@ export interface Story {
   id: number;
   user: { id: number; display_name: string | null; username: string | null; avatar_url: string | null };
   media_url: string | null;
+  media_type: "image" | "video";
   text: string | null;
   background: string;
   created_at: string;
   expires_at: string;
   viewed_by_me: boolean;
   view_count: number;
+  reaction_counts: Record<string, number>;
+  reactions: Array<{ user_id: number; display_name: string | null; username: string | null; avatar_url: string | null; emoji: string }>;
+  my_reaction: string | null;
 }
 
 export interface StoryGroup { user: Story["user"]; stories: Story[] }
 export const listStories = () => apiFetch<StoryGroup[]>("/stories", { method: "GET" });
-export const createStory = (body: { media_url?: string | null; text?: string | null; background?: string }) =>
+export const createStory = (body: { media_url?: string | null; media_type?: "image" | "video"; text?: string | null; background?: string }) =>
   apiFetch<Story>("/stories", { method: "POST", body });
+export async function uploadStoryMedia(file: File): Promise<{ url: string; media_type: "image" | "video" }> {
+  const form = new FormData();
+  form.append("file", file);
+  const headers = new Headers({ accept: "application/json" });
+  const token = useAuthStore.getState().token;
+  if (token) headers.set("authorization", `Bearer ${token}`);
+  const response = await fetch(`${env.apiUrl}/stories/upload`, { method: "POST", headers, body: form });
+  const text = await response.text();
+  const data: unknown = text ? JSON.parse(text) : null;
+  if (!response.ok) {
+    const detail = data && typeof data === "object" && "detail" in data
+      ? (data as { detail: string }).detail
+      : response.statusText || "Story media upload failed";
+    throw new ApiError(detail, response.status);
+  }
+  return data as { url: string; media_type: "image" | "video" };
+}
 export const markStoryViewed = (storyId: number) =>
   apiFetch<void>(`/stories/${storyId}/view`, { method: "POST" });
+export const reactToStory = (storyId: number, emoji: string) =>
+  apiFetch<void>(`/stories/${storyId}/reaction`, { method: "PUT", body: { emoji } });
+export const removeStoryReaction = (storyId: number) =>
+  apiFetch<void>(`/stories/${storyId}/reaction`, { method: "DELETE" });
 export const deleteStory = (storyId: number) =>
   apiFetch<void>(`/stories/${storyId}`, { method: "DELETE" });
 
