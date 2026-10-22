@@ -61,7 +61,11 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
   const [call, setCall] = useState<CallState | null>(null);
   const [audioNeedsInteraction, setAudioNeedsInteraction] = useState(false);
   const [remoteStreams, setRemoteStreams] = useState<Record<number, MediaStream>>({});
-  const [clock, setClock] = useState(Date.now());
+  const [clock, setClock] = useState(0);
+
+useEffect(() => {
+  setClock(Date.now());
+}, []);
   const callRef = useRef<CallState | null>(null);
   const peerConnectionsRef = useRef(new Map<number, RTCPeerConnection>());
   const localStreamRef = useRef<MediaStream | null>(null);
