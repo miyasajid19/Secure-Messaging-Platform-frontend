@@ -38,6 +38,21 @@ import { useRealtimeStore } from "@/store/realtime";
 import { useUiStore } from "@/store/ui";
 
 const incomingMessageListeners = new Set<(message: Message) => void>();
+export interface CallSignal {
+  type: string;
+  call_id?: string;
+  conversation_id?: number;
+  from_user_id?: number;
+  to_user_id?: number;
+  from_name?: string;
+  from_avatar_url?: string | null;
+  media_type?: "audio" | "video";
+  media_type?: "audio" | "video";
+  message?: string;
+  description?: RTCSessionDescriptionInit;
+  candidate?: RTCIceCandidateInit | null;
+}
+const callSignalListeners = new Set<(signal: CallSignal) => void>();
 
 /** Subscribe to de-duplicated messages received from the WebSocket. */
 export function subscribeToIncomingMessages(
@@ -47,6 +62,19 @@ export function subscribeToIncomingMessages(
   return () => {
     incomingMessageListeners.delete(listener);
   };
+}
+
+export function subscribeToCallSignals(listener: (signal: CallSignal) => void): () => void {
+  callSignalListeners.add(listener);
+  return () => callSignalListeners.delete(listener);
+}
+
+export function sendCallSignal(payload: object): boolean {
+  return send(payload);
+}
+
+export function isRealtimeConnected(): boolean {
+  return state.socket?.readyState === WebSocket.OPEN;
 }
 
 // --- incoming wire types --------------------------------------------------
@@ -281,6 +309,13 @@ export function send(payload: object): boolean {
 // --- routing --------------------------------------------------------------
 
 function route(msg: IncomingMessage) {
+  if (typeof msg.type === "string" && msg.type.startsWith("call.")) {
+    for (const listener of callSignalListeners) {
+      try { listener(msg as unknown as CallSignal); }
+      catch (error) { console.warn("[realtime] call signal listener failed", error); }
+    }
+    return;
+  }
   switch (msg.type) {
     case "presence.snapshot":
       handlePresenceSnapshot(msg as unknown as PresenceSnapshot);

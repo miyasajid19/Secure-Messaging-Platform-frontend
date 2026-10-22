@@ -62,6 +62,7 @@ import { useAuthStore } from "@/store/auth";
 import { useRealtimeStore } from "@/store/realtime";
 import { useReplyStore } from "@/store/reply";
 import { conversationTitle } from "@/lib/conversation-title";
+import { useVoiceCall } from "@/components/voice-call-provider";
 
 interface Props {
   /** On mobile this component is hidden unless conversationId is set. */
@@ -106,6 +107,7 @@ function outgoingReadersForMessage(
 }
 
 export function ChatPane({ showBackButton = false, onBack }: Props) {
+  const { startCall } = useVoiceCall();
   const conversationId = useUiStore((s) => s.selectedConversationId);
   const setSelectedConversation = useUiStore((s) => s.setSelected);
   const storedUser = useAuthStore((s) => s.user);
@@ -552,6 +554,26 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
         onMenuClose={() => setChatMenuOpen(false)}
         onGroupSettings={() => { setChatMenuOpen(false); setGroupInfoOpen(true); }}
         onLeaveGroup={handleLeaveGroup}
+        canVoiceCall={conv.type === "direct" && !!otherParticipant}
+        onVoiceCall={() => {
+          if (!otherParticipant) return;
+          void startCall(
+            cid,
+            otherParticipant.id,
+            otherParticipant.display_name ?? otherParticipant.username ?? otherParticipant.phone ?? "Signal user",
+            otherParticipant.avatar_url,
+          );
+        }}
+        onVideoCall={() => {
+          if (!otherParticipant) return;
+          void startCall(
+            cid,
+            otherParticipant.id,
+            otherParticipant.display_name ?? otherParticipant.username ?? otherParticipant.phone ?? "Signal user",
+            otherParticipant.avatar_url,
+            "video",
+          );
+        }}
       />
 
       <div
@@ -725,6 +747,9 @@ interface ChatHeaderProps {
   onMenuClose: () => void;
   onGroupSettings: () => void;
   onLeaveGroup: () => void;
+  canVoiceCall: boolean;
+  onVoiceCall: () => void;
+  onVideoCall: () => void;
 }
 
 function ChatHeader({
@@ -740,6 +765,9 @@ function ChatHeader({
   onMenuClose,
   onGroupSettings,
   onLeaveGroup,
+  canVoiceCall,
+  onVoiceCall,
+  onVideoCall,
 }: ChatHeaderProps) {
   return (
     <header
@@ -780,18 +808,15 @@ function ChatHeader({
           {subtitle}
         </span>
       </button>
-      <IconBtn
-        aria-label="Voice call"
-        title="Voice calls — coming soon"
-        onClick={() => toast.info("Voice calls — coming soon")}
-        className="hidden sm:flex"
-      >
-        <Phone size={18} />
-      </IconBtn>
+      {canVoiceCall ? (
+        <IconBtn aria-label="Start voice call" title="Start voice call" onClick={onVoiceCall}>
+          <Phone size={18} />
+        </IconBtn>
+      ) : null}
       <IconBtn
         aria-label="Video call"
-        title="Video calls — coming soon"
-        onClick={() => toast.info("Video calls — coming soon")}
+        title="Start video call"
+        onClick={onVideoCall}
         className="hidden sm:flex"
       >
         <Video size={18} />

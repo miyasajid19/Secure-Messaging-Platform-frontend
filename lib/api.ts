@@ -598,6 +598,14 @@ export const getMessageStatus = (
 export const getOnlineUsers = () =>
   apiFetch<number[]>("/users/online", { method: "GET" });
 
+export interface IceServer {
+  urls: string | string[];
+  username?: string;
+  credential?: string;
+}
+export const getIceServers = () =>
+  apiFetch<{ ice_servers: IceServer[] }>("/calls/ice-servers", { method: "GET" });
+
 /** Map backend's status string (`sending|sent|delivered|read|failed`) to
  *  the value our bubble component uses. An absent/unknown status means
  *  we know only that the message was sent; it is not proof of delivery

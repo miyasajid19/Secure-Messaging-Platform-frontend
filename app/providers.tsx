@@ -30,6 +30,7 @@ import { useUiStore } from "@/store/ui";
 import { connect, disconnect, subscribeToIncomingMessages } from "@/lib/realtime";
 import { useNotificationSound } from "@/lib/notification-sound";
 import { useTheme } from "@/lib/theme";
+import { VoiceCallProvider } from "@/components/voice-call-provider";
 
 // Phase 7 §3 — keyboard shortcuts. We can't put ⌘K / `/` on a
 // component because the user is "anywhere" on the page. Mount a single
@@ -171,7 +172,7 @@ export function Providers({ children }: { children: ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      {children}
+      <VoiceCallProvider>{children}</VoiceCallProvider>
       <Toaster
         position="top-right"
         richColors
