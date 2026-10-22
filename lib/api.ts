@@ -36,6 +36,27 @@ export interface User {
   last_seen: string | null;
 }
 
+export interface Story {
+  id: number;
+  user: { id: number; display_name: string | null; username: string | null; avatar_url: string | null };
+  media_url: string | null;
+  text: string | null;
+  background: string;
+  created_at: string;
+  expires_at: string;
+  viewed_by_me: boolean;
+  view_count: number;
+}
+
+export interface StoryGroup { user: Story["user"]; stories: Story[] }
+export const listStories = () => apiFetch<StoryGroup[]>("/stories", { method: "GET" });
+export const createStory = (body: { media_url?: string | null; text?: string | null; background?: string }) =>
+  apiFetch<Story>("/stories", { method: "POST", body });
+export const markStoryViewed = (storyId: number) =>
+  apiFetch<void>(`/stories/${storyId}/view`, { method: "POST" });
+export const deleteStory = (storyId: number) =>
+  apiFetch<void>(`/stories/${storyId}`, { method: "DELETE" });
+
 // Phase 8.2 — message reactions. The backend groups reactions by
 // emoji and returns the user list (id + display_name + avatar_url) per
 // group. `count` is a denormalised total to avoid summing on the
@@ -608,4 +629,5 @@ export const queryKeys = {
     ["messages", conversationId] as const,
   contacts: ["contacts"] as const,
   userSearch: (q: string) => ["users", "search", q] as const,
+  stories: ["stories"] as const,
 };

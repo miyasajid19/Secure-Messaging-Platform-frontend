@@ -16,7 +16,7 @@ import {
   Phone,
   Settings,
 } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { toast } from "sonner";
 
 type RailKey = "chats" | "calls" | "stories";
@@ -29,6 +29,7 @@ const railIcons: Array<{ key: RailKey; label: string; Icon: typeof MessageCircle
 
 export function LeftRail({ onHide }: { onHide: () => void }) {
   const router = useRouter();
+  const pathname = usePathname();
 
   return (
     <nav
@@ -51,7 +52,9 @@ export function LeftRail({ onHide }: { onHide: () => void }) {
         </button>
         <ul className="flex flex-col items-center gap-3">
           {railIcons.map(({ key, label, Icon }) => {
-            const isActive = key === "chats";
+            const isActive = key === "chats"
+              ? pathname === "/chat" || pathname === "/"
+              : key === "stories" && pathname.startsWith("/stories");
             return (
               <li key={key}>
                 <button
@@ -60,11 +63,12 @@ export function LeftRail({ onHide }: { onHide: () => void }) {
                   aria-current={isActive ? "page" : undefined}
                   title={label}
                   onClick={() => {
-                    if (key === "calls" || key === "stories") {
+                    if (key === "calls") {
                       toast.info(`${label} — coming soon`);
                       return;
                     }
-                    if (key === "chats") router.push("/");
+                    if (key === "stories") { router.push("/stories"); return; }
+                    if (key === "chats") router.push("/chat");
                   }}
                   className="flex h-11 w-11 items-center justify-center rounded-full transition"
                   style={{

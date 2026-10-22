@@ -86,8 +86,8 @@ export function ChatBottomNav() {
       <Item
         label="Stories"
         Icon={BookOpen}
-        active={false}
-        onClick={() => toast.info("Stories are coming soon", { position: "top-right" })}
+        active={pathname.startsWith("/stories")}
+        onClick={() => router.push("/stories")}
       />
       <Item
         label="Settings"
