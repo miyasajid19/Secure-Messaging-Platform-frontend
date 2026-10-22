@@ -3,19 +3,21 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowDownLeft, ArrowLeft, ArrowUpRight, Phone, Video } from "lucide-react";
+import { toast } from "sonner";
 import { Avatar } from "@/components/avatar";
 import { ChatBottomNav } from "@/components/chat-bottom-nav";
 import { LeftRail } from "@/components/left-rail";
 import { useVoiceCall } from "@/components/voice-call-provider";
-import { getCallHistory, type CallHistoryEntry } from "@/lib/api";
+import { getCallHistory, listConversations, type CallHistoryEntry, type Conversation } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
 
 export default function CallsPage() {
   const router = useRouter();
   const user = useAuthStore((state) => state.user);
   const hydrated = useAuthStore((state) => state.hydrated);
-  const { startCall } = useVoiceCall();
+  const { startCall, startGroupCall } = useVoiceCall();
   const [entries, setEntries] = useState<CallHistoryEntry[]>([]);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
   const [historyError, setHistoryError] = useState(false);
 
   useEffect(() => {
@@ -39,8 +41,42 @@ export default function CallsPage() {
   }, [hydrated, user]);
 
   useEffect(() => {
+    if (!hydrated || !user) return;
+    let disposed = false;
+    void listConversations().then((items) => {
+      if (!disposed) setConversations(items);
+    }).catch(() => {
+      if (!disposed) setConversations([]);
+    });
+    return () => { disposed = true; };
+  }, [hydrated, user]);
+
+  useEffect(() => {
     if (hydrated && !user) router.replace("/auth/phone");
   }, [hydrated, user, router]);
+
+  const redial = (entry: CallHistoryEntry, mediaType: "audio" | "video") => {
+    if (!entry.is_group && entry.peer_id != null) {
+      void startCall(entry.conversation_id, entry.peer_id, entry.peer_name, entry.peer_avatar_url, mediaType);
+      return;
+    }
+    const conversation = conversations.find((item) => item.id === entry.conversation_id && item.type === "group");
+    if (!conversation) {
+      toast.error("This group is no longer available");
+      return;
+    }
+    void startGroupCall(
+      conversation.id,
+      conversation.name ?? "Group call",
+      conversation.avatar_url,
+      conversation.participants.map((participant) => ({
+        id: participant.id,
+        displayName: participant.display_name ?? participant.username ?? participant.phone ?? "Signal user",
+        avatarUrl: participant.avatar_url,
+      })),
+      mediaType,
+    );
+  };
 
   return (
     <div className="flex h-screen min-h-0 w-full overflow-hidden" style={{ backgroundColor: "var(--color-bg-primary)" }}>
@@ -76,9 +112,9 @@ export default function CallsPage() {
                   </p>
                 </div>
                 <time className="hidden shrink-0 text-xs text-[var(--color-fg-muted)] sm:block">{new Date(entry.timestamp).toLocaleString()}</time>
-                {!entry.is_group && entry.peer_id != null ? <div className="flex shrink-0 gap-1">
-                  <button type="button" onClick={() => void startCall(entry.conversation_id, entry.peer_id!, entry.peer_name, entry.peer_avatar_url, "audio")} aria-label={`Call ${entry.peer_name}`} title="Audio call" className="rounded-full p-2.5 text-[var(--color-accent)] hover:bg-[var(--color-bg-tertiary)]"><Phone size={18} /></button>
-                  <button type="button" onClick={() => void startCall(entry.conversation_id, entry.peer_id!, entry.peer_name, entry.peer_avatar_url, "video")} aria-label={`Video call ${entry.peer_name}`} title="Video call" className="rounded-full p-2.5 text-[var(--color-accent)] hover:bg-[var(--color-bg-tertiary)]"><Video size={18} /></button>
+                {(!entry.is_group || conversations.some((conversation) => conversation.id === entry.conversation_id && conversation.type === "group")) ? <div className="flex shrink-0 gap-1">
+                  <button type="button" onClick={() => redial(entry, "audio")} aria-label={`Call ${entry.peer_name}`} title="Audio call" className="rounded-full p-2.5 text-[var(--color-accent)] hover:bg-[var(--color-bg-tertiary)]"><Phone size={18} /></button>
+                  <button type="button" onClick={() => redial(entry, "video")} aria-label={`Video call ${entry.peer_name}`} title="Video call" className="rounded-full p-2.5 text-[var(--color-accent)] hover:bg-[var(--color-bg-tertiary)]"><Video size={18} /></button>
                 </div> : null}
               </li>)}
             </ul>
