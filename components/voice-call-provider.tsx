@@ -12,6 +12,7 @@ import {
 import { Camera, CameraOff, Mic, MicOff, Phone, PhoneOff, Video } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar } from "@/components/avatar";
+import { useAuthStore } from "@/store/auth";
 import { getIceServers, type IceServer } from "@/lib/api";
 import { isRealtimeConnected, sendCallSignal, subscribeToCallSignals, type CallSignal } from "@/lib/realtime";
 
@@ -27,6 +28,7 @@ type CallState = {
   startedAt: number | null;
   muted: boolean;
   cameraOff: boolean;
+  peerCameraOff: boolean;
 };
 
 type VoiceCallContextValue = {
@@ -47,7 +49,9 @@ export function useVoiceCall() {
 }
 
 export function VoiceCallProvider({ children }: { children: ReactNode }) {
+  const self = useAuthStore((state) => state.user);
   const [call, setCall] = useState<CallState | null>(null);
+  const [audioNeedsInteraction, setAudioNeedsInteraction] = useState(false);
   const [clock, setClock] = useState(Date.now());
   const callRef = useRef<CallState | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
@@ -72,6 +76,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     pendingCandidatesRef.current = [];
     if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+    setAudioNeedsInteraction(false);
   }, [updateCall]);
 
   const iceServers = useCallback(async () => {
@@ -100,8 +105,17 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     pc.ontrack = (event) => {
       const stream = event.streams[0] ?? new MediaStream([event.track]);
       if (session.mediaType === "video") {
+        // Play incoming audio through a dedicated audio element. Keeping
+        // the video element muted avoids duplicate audio while making it
+        // possible to recover cleanly when the browser blocks autoplay.
+        const audio = remoteAudioRef.current;
+        if (audio && stream.getAudioTracks().length) {
+          audio.srcObject = new MediaStream(stream.getAudioTracks());
+          void audio.play().then(() => setAudioNeedsInteraction(false)).catch(() => setAudioNeedsInteraction(true));
+        }
         if (remoteVideoRef.current) {
           remoteVideoRef.current.srcObject = stream;
+          remoteVideoRef.current.muted = true;
           void remoteVideoRef.current.play().catch(() => {});
         }
       } else if (remoteAudioRef.current) {
@@ -166,6 +180,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
         startedAt: null,
         muted: false,
         cameraOff: false,
+        peerCameraOff: false,
       });
       return;
     }
@@ -177,6 +192,11 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     }
     const current = callRef.current;
     if (!current || !signal.call_id || signal.call_id !== current.callId) return;
+
+    if (signal.type === "call.camera" && typeof signal.camera_off === "boolean") {
+      updateCall({ ...current, peerCameraOff: signal.camera_off });
+      return;
+    }
 
     if (["call.unavailable", "call.rejected", "call.cancelled", "call.ended", "call.peer_offline"].includes(signal.type)) {
       if (signal.type === "call.unavailable" || signal.type === "call.rejected") toast.info(signal.message || `${current.peerName} didn't answer`);
@@ -266,7 +286,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     }
     const session: CallState = {
       callId: crypto.randomUUID(), conversationId, peerId, peerName, peerAvatarUrl,
-      mediaType, direction: "outgoing", status: "ringing", startedAt: null, muted: false, cameraOff: false,
+      mediaType, direction: "outgoing", status: "ringing", startedAt: null, muted: false, cameraOff: false, peerCameraOff: false,
     };
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: mediaType === "video" });
@@ -329,7 +349,20 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     const track = localStreamRef.current?.getVideoTracks()[0];
     if (!track) return;
     track.enabled = !track.enabled;
-    updateCall({ ...current, cameraOff: !track.enabled });
+    const cameraOff = !track.enabled;
+    updateCall({ ...current, cameraOff });
+    sendCallSignal({ type: "call.camera", call_id: current.callId, conversation_id: current.conversationId, to_user_id: current.peerId, camera_off: cameraOff });
+  }
+
+  async function enableCallAudio() {
+    const audio = remoteAudioRef.current;
+    if (!audio) return;
+    try {
+      await audio.play();
+      setAudioNeedsInteraction(false);
+    } catch {
+      setAudioNeedsInteraction(true);
+    }
   }
 
   useEffect(() => {
@@ -349,11 +382,16 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
       <audio ref={remoteAudioRef} autoPlay playsInline />
       {call?.mediaType === "video" ? <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black p-3 sm:p-6" role="presentation">
         <section role="dialog" aria-modal="true" aria-label="Video call" className="relative h-full max-h-[min(82vh,900px)] w-full max-w-5xl overflow-hidden rounded-3xl bg-neutral-950 text-white shadow-2xl">
-          <video ref={remoteVideoRef} autoPlay playsInline className="h-full w-full object-cover" />
+          <video ref={remoteVideoRef} autoPlay playsInline className={`h-full w-full object-cover ${call.peerCameraOff ? "hidden" : ""}`} />
+          {call.peerCameraOff ? <div className="absolute inset-0 flex items-center justify-center bg-neutral-900"><Avatar subject={{ avatar_url: call.peerAvatarUrl, display_name: call.peerName }} size={144} showOnline={false} /></div> : null}
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/45 via-transparent to-black/55" />
           <div className="absolute left-5 top-5 z-10"><h2 className="text-xl font-semibold">{call.peerName}</h2><p className="text-sm text-white/80">{call.status === "active" ? duration : call.direction === "incoming" ? "Incoming video call" : call.status === "connecting" ? "Connecting…" : "Calling…"}</p></div>
-          {call.status !== "active" ? <div className="absolute inset-0 flex items-center justify-center"><Avatar subject={{ avatar_url: call.peerAvatarUrl, display_name: call.peerName }} size={112} showOnline={false} /></div> : null}
-          {call.direction === "incoming" && call.status === "ringing" ? null : <video ref={localVideoRef} autoPlay muted playsInline className="absolute bottom-24 right-5 z-10 aspect-video w-36 rounded-2xl border border-white/30 bg-black object-cover shadow-lg sm:w-52" />}
+          {audioNeedsInteraction ? <button onClick={() => void enableCallAudio()} className="absolute left-1/2 top-5 z-20 -translate-x-1/2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-black shadow-lg hover:bg-white/90">Tap to enable audio</button> : null}
+          {call.status !== "active" && !call.peerCameraOff ? <div className="absolute inset-0 flex items-center justify-center"><Avatar subject={{ avatar_url: call.peerAvatarUrl, display_name: call.peerName }} size={112} showOnline={false} /></div> : null}
+          {call.direction === "incoming" && call.status === "ringing" ? null : <div className="absolute bottom-24 right-5 z-10 flex aspect-video w-36 items-center justify-center overflow-hidden rounded-2xl border border-white/30 bg-neutral-900 shadow-lg sm:w-52">
+            <video ref={localVideoRef} autoPlay muted playsInline className={`h-full w-full object-cover ${call.cameraOff ? "hidden" : ""}`} />
+            {call.cameraOff ? <Avatar subject={{ avatar_url: self?.avatar_url ?? null, display_name: self?.display_name ?? self?.username ?? "You" }} size={76} showOnline={false} /> : null}
+          </div>}
           <div className="absolute bottom-6 left-1/2 z-20 flex -translate-x-1/2 items-center gap-4 rounded-full bg-black/45 px-5 py-3 backdrop-blur-md">
             {call.direction === "incoming" && call.status === "ringing" ? <><button onClick={declineOrEnd} aria-label="Decline call" className="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 hover:bg-red-700"><PhoneOff size={22} /></button><button onClick={() => void acceptCall()} aria-label="Answer video call" className="flex h-14 w-14 items-center justify-center rounded-full bg-green-600 hover:bg-green-700"><Video size={22} /></button></> : <><button onClick={toggleMute} aria-label={call.muted ? "Unmute microphone" : "Mute microphone"} className="flex h-12 w-12 items-center justify-center rounded-full bg-white/15 hover:bg-white/25">{call.muted ? <MicOff size={21} /> : <Mic size={21} />}</button><button onClick={toggleCamera} aria-label={call.cameraOff ? "Turn camera on" : "Turn camera off"} className="flex h-12 w-12 items-center justify-center rounded-full bg-white/15 hover:bg-white/25">{call.cameraOff ? <CameraOff size={21} /> : <Camera size={21} />}</button><button onClick={declineOrEnd} aria-label="End call" className="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 hover:bg-red-700"><PhoneOff size={22} /></button></>}
           </div>

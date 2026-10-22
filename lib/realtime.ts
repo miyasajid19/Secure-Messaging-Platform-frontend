@@ -47,7 +47,7 @@ export interface CallSignal {
   from_name?: string;
   from_avatar_url?: string | null;
   media_type?: "audio" | "video";
-  media_type?: "audio" | "video";
+  camera_off?: boolean;
   message?: string;
   description?: RTCSessionDescriptionInit;
   candidate?: RTCIceCandidateInit | null;
