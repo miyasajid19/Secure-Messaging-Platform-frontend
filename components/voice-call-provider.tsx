@@ -271,6 +271,72 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     }, 30_000);
     return () => window.clearTimeout(timer);
   }, [call, cleanup]);
+
+  // Use Web Audio for a small local ringback/ringtone, so no external
+  // sound file or extra dependency is needed. The effect is torn down
+  // as soon as ringing ends or the call changes.
+  useEffect(() => {
+    if (!call || call.status !== "ringing") return;
+    const AudioContextClass = window.AudioContext;
+    if (!AudioContextClass) return;
+    const context = new AudioContextClass();
+    let disposed = false;
+    const oscillators = new Set<OscillatorNode>();
+
+    const playTone = (frequency: number, delay: number, duration: number) => {
+      window.setTimeout(() => {
+        if (disposed || context.state === "closed") return;
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        oscillators.add(oscillator);
+        oscillator.type = "sine";
+        oscillator.frequency.value = frequency;
+        gain.gain.setValueAtTime(0, context.currentTime);
+        gain.gain.linearRampToValueAtTime(0.12, context.currentTime + 0.04);
+        gain.gain.setValueAtTime(0.12, context.currentTime + duration - 0.06);
+        gain.gain.linearRampToValueAtTime(0, context.currentTime + duration);
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        oscillator.start();
+        oscillator.stop(context.currentTime + duration);
+        oscillator.onended = () => {
+          oscillators.delete(oscillator);
+          oscillator.disconnect();
+          gain.disconnect();
+        };
+      }, delay);
+    };
+
+    const ring = () => {
+      if (call.direction === "outgoing") {
+        // Familiar dual-tone ringback for the caller.
+        playTone(440, 0, 0.45);
+        playTone(480, 0, 0.45);
+        playTone(440, 650, 0.45);
+        playTone(480, 650, 0.45);
+      } else {
+        // A brighter, three-note cadence makes the recipient's ringtone
+        // distinct from the caller's ringback.
+        playTone(660, 0, 0.24);
+        playTone(880, 300, 0.38);
+        playTone(660, 850, 0.24);
+        playTone(880, 1150, 0.38);
+      }
+    };
+
+    void context.resume().catch(() => {});
+    ring();
+    const interval = window.setInterval(ring, call.direction === "outgoing" ? 3000 : 3000);
+    return () => {
+      disposed = true;
+      window.clearInterval(interval);
+      oscillators.forEach((oscillator) => {
+        try { oscillator.stop(); } catch { /* Already stopped. */ }
+      });
+      void context.close().catch(() => {});
+    };
+  }, [call?.callId, call?.direction, call?.status]);
+
   useEffect(() => {
     if (!call?.startedAt) return;
     const timer = window.setInterval(() => setClock(Date.now()), 1000);
