@@ -605,8 +605,8 @@ export interface IceServer {
   username?: string;
   credential?: string;
 }
-export const getIceServers = () =>
-  apiFetch<{ ice_servers: IceServer[] }>("/calls/ice-servers", { method: "GET" });
+export const getIceServers = (signal?: AbortSignal) =>
+  apiFetch<{ ice_servers: IceServer[] }>("/calls/ice-servers", { method: "GET", signal });
 
 export interface CallHistoryEntry {
   call_id: string;

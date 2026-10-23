@@ -48,6 +48,69 @@ const FALLBACK_ICE_SERVERS: IceServer[] = [
   { urls: "stun:stun1.l.google.com:19302" },
 ];
 
+function RemoteVideo({ stream, name, cameraOff, avatarUrl }: {
+  stream: MediaStream | undefined;
+  name: string;
+  cameraOff: boolean;
+  avatarUrl: string | null;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !stream || cameraOff) return;
+    if (video.srcObject !== stream) video.srcObject = stream;
+    void video.play().catch(() => {});
+    return () => { video.srcObject = null; };
+  }, [stream, cameraOff]);
+
+  return stream && !cameraOff
+    ? <video ref={videoRef} autoPlay playsInline className="h-full w-full object-cover" />
+    : <Avatar subject={{ avatar_url: avatarUrl, display_name: name }} size={112} showOnline={false} />;
+}
+
+function RemoteAudio({ stream, onPlaybackBlocked, userId, audioElements }: {
+  stream: MediaStream;
+  onPlaybackBlocked: (blocked: boolean) => void;
+  userId: number;
+  audioElements: Map<number, HTMLAudioElement>;
+}) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const setAudioElement = useCallback((element: HTMLAudioElement | null) => {
+    audioRef.current = element;
+    if (element) audioElements.set(userId, element);
+    else audioElements.delete(userId);
+  }, [audioElements, userId]);
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    let attachedTrackIds = "";
+    const attachAudioTracks = () => {
+      const tracks = stream.getAudioTracks().filter((track) => track.readyState === "live");
+      if (!tracks.length) {
+        attachedTrackIds = "";
+        audio.srcObject = null;
+        return;
+      }
+      const trackIds = tracks.map((track) => track.id).join(",");
+      if (trackIds === attachedTrackIds) return;
+      attachedTrackIds = trackIds;
+      audio.srcObject = new MediaStream(tracks);
+      void audio.play().then(() => onPlaybackBlocked(false)).catch(() => onPlaybackBlocked(true));
+    };
+    stream.addEventListener("addtrack", attachAudioTracks);
+    stream.addEventListener("removetrack", attachAudioTracks);
+    attachAudioTracks();
+    return () => {
+      stream.removeEventListener("addtrack", attachAudioTracks);
+      stream.removeEventListener("removetrack", attachAudioTracks);
+      audio.pause();
+      audio.srcObject = null;
+    };
+  }, [stream, onPlaybackBlocked]);
+
+  return <audio ref={setAudioElement} autoPlay playsInline className="sr-only" />;
+}
+
 export function useVoiceCall() {
   const context = useContext(VoiceCallContext);
   if (!context) throw new Error("useVoiceCall must be used inside VoiceCallProvider");
@@ -72,6 +135,8 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
   const remoteAudioElementsRef = useRef(new Map<number, HTMLAudioElement>());
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const pendingCandidatesRef = useRef(new Map<number, RTCIceCandidateInit[]>());
+  const iceServerCacheRef = useRef<{ servers: IceServer[]; expiresAt: number } | null>(null);
+  const iceServerRequestRef = useRef<Promise<IceServer[]> | null>(null);
 
   const updateCall = useCallback((next: CallState | null) => {
     callRef.current = next;
@@ -91,11 +156,22 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
   }, [updateCall]);
 
   const iceServers = useCallback(async () => {
-    try {
-      return (await getIceServers()).ice_servers;
-    } catch {
-      return FALLBACK_ICE_SERVERS;
+    const cached = iceServerCacheRef.current;
+    if (cached && cached.expiresAt > Date.now()) return cached.servers;
+    if (!iceServerRequestRef.current) {
+      iceServerRequestRef.current = getIceServers(AbortSignal.timeout(5000))
+        .then(({ ice_servers }) => {
+          iceServerCacheRef.current = { servers: ice_servers, expiresAt: Date.now() + 5 * 60_000 };
+          return ice_servers;
+        })
+        .catch(() => {
+          // Avoid serial network timeouts for every peer in a group call.
+          iceServerCacheRef.current = { servers: FALLBACK_ICE_SERVERS, expiresAt: Date.now() + 30_000 };
+          return FALLBACK_ICE_SERVERS;
+        })
+        .finally(() => { iceServerRequestRef.current = null; });
     }
+    return iceServerRequestRef.current;
   }, []);
 
   const createPeerConnection = useCallback(async (session: CallState, remoteUserId: number) => {
@@ -116,7 +192,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     };
     pc.ontrack = (event) => {
       const stream = event.streams[0] ?? new MediaStream([event.track]);
-      setRemoteStreams((current) => ({ ...current, [remoteUserId]: stream }));
+      setRemoteStreams((current) => current[remoteUserId] === stream ? current : { ...current, [remoteUserId]: stream });
     };
     pc.onconnectionstatechange = () => {
       const current = callRef.current;
@@ -130,7 +206,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
           peerConnectionsRef.current.delete(remoteUserId);
           setRemoteStreams((streams) => { const next = { ...streams }; delete next[remoteUserId]; return next; });
         } else cleanup();
-        if (pc.connectionState === "failed") toast.error("Call connection failed");
+        if (pc.connectionState === "failed") toast.error("Call connection failed. For calls across different networks, configure a TURN server in the backend.");
       }
     };
     return pc;
@@ -182,6 +258,8 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
         sendCallSignal({ type: "call.reject", call_id: signal.call_id, conversation_id: signal.conversation_id, to_user_id: signal.from_user_id, media_type: signal.media_type, is_group: signal.is_group });
         return;
       }
+      // Fetch STUN/TURN config while the recipient is still hearing the ring.
+      void iceServers();
       const inviter = {
         id: signal.from_user_id,
         displayName: signal.from_name || "Signal user",
@@ -313,7 +391,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
         catch { /* A late candidate can arrive after a call ends. */ }
       }
     }
-  }, [cleanup, createPeerConnection, flushCandidates, sendOffer, updateCall, setActiveGroupCall, clearActiveGroupCall]);
+  }, [cleanup, createPeerConnection, flushCandidates, sendOffer, updateCall, setActiveGroupCall, clearActiveGroupCall, iceServers]);
 
   useEffect(() => subscribeToCallSignals((signal) => { void handleSignal(signal); }), [handleSignal]);
   useEffect(() => {
@@ -445,6 +523,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
       isGroup: false, participants: [], peerCameraOffById: {},
     };
     try {
+      void iceServers();
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: mediaType === "video" });
       localStreamRef.current = stream;
       updateCall(session);
@@ -459,7 +538,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
         : mediaType === "video" ? "Couldn't access your camera or microphone" : "Couldn't access your microphone";
       toast.error(message);
     }
-  }, [cleanup, updateCall]);
+  }, [cleanup, iceServers, updateCall]);
 
   const startGroupCall = useCallback(async (
     conversationId: number,
@@ -482,6 +561,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
       peerCameraOffById: {},
     };
     try {
+      void iceServers();
       localStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true, video: mediaType === "video" });
       updateCall(session);
       if (!sendCallSignal({
@@ -495,7 +575,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
       cleanup();
       toast.error(error instanceof DOMException && error.name === "NotAllowedError" ? "Allow camera and microphone access" : "Couldn't access your camera or microphone");
     }
-  }, [cleanup, self, updateCall]);
+  }, [cleanup, iceServers, self, updateCall]);
 
   const joinGroupCall = useCallback(async (active: ActiveGroupCall, groupAvatarUrl: string | null) => {
     if (callRef.current) { toast.info("You're already in a call"); return; }
@@ -521,6 +601,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
       peerCameraOffById: {},
     };
     try {
+      void iceServers();
       localStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true, video: active.media_type === "video" });
       updateCall(session);
       if (!sendCallSignal({
@@ -533,7 +614,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
       cleanup();
       toast.error(error instanceof DOMException && error.name === "NotAllowedError" ? "Allow microphone and camera access to join" : "Couldn't join the call");
     }
-  }, [cleanup, self, updateCall]);
+  }, [cleanup, iceServers, self, updateCall]);
 
   async function acceptCall() {
     const current = callRef.current;
@@ -604,11 +685,6 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     setAudioNeedsInteraction(results.some((result) => result.status === "rejected"));
   }
 
-  const registerRemoteAudio = useCallback((userId: number, element: HTMLAudioElement | null) => {
-    if (element) remoteAudioElementsRef.current.set(userId, element);
-    else remoteAudioElementsRef.current.delete(userId);
-  }, []);
-
   useEffect(() => {
     if (localVideoRef.current && localStreamRef.current && call?.mediaType === "video") {
       localVideoRef.current.srcObject = localStreamRef.current;
@@ -628,15 +704,13 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
   return (
     <VoiceCallContext.Provider value={{ call, startCall, startGroupCall, joinGroupCall }}>
       {children}
-      {Object.entries(remoteStreams).map(([userId, stream]) => <audio key={`audio-${userId}`} autoPlay playsInline className="sr-only" ref={(element) => {
-        const id = Number(userId);
-        if (!element) { registerRemoteAudio(id, null); return; }
-        registerRemoteAudio(id, element);
-        if (stream.getAudioTracks().length) {
-          element.srcObject = new MediaStream(stream.getAudioTracks());
-          void element.play().then(() => setAudioNeedsInteraction(false)).catch(() => setAudioNeedsInteraction(true));
-        }
-      }} />)}
+      {Object.entries(remoteStreams).map(([userId, stream]) => <RemoteAudio
+        key={`audio-${userId}`}
+        userId={Number(userId)}
+        stream={stream}
+        audioElements={remoteAudioElementsRef.current}
+        onPlaybackBlocked={setAudioNeedsInteraction}
+      />)}
       {call?.mediaType === "video" ? <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black p-3 sm:p-6" role="presentation">
         <section role="dialog" aria-modal="true" aria-label="Video call" className="relative h-full max-h-[min(82vh,900px)] w-full max-w-5xl overflow-hidden rounded-3xl bg-neutral-950 text-white shadow-2xl">
           <div className="absolute inset-0 grid gap-3 p-3 sm:p-5" style={{ gridTemplateColumns: `repeat(${Math.max(1, Math.ceil(Math.sqrt(remoteParticipants.length || 1)))}, minmax(0, 1fr))` }}>
@@ -644,9 +718,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
               const stream = remoteStreams[participant.id];
               const cameraOff = call.isGroup ? Boolean(call.peerCameraOffById[participant.id]) : call.peerCameraOff;
               return <div key={participant.id} className="relative flex min-h-0 items-center justify-center overflow-hidden rounded-2xl bg-neutral-900">
-                {stream && !cameraOff ? <video autoPlay playsInline className="h-full w-full object-cover" ref={(element) => {
-                  if (element) { element.srcObject = stream; element.muted = true; void element.play().catch(() => {}); }
-                }} /> : <Avatar subject={{ avatar_url: participant.avatarUrl, display_name: participant.displayName }} size={112} showOnline={false} />}
+                <RemoteVideo stream={stream} name={participant.displayName} cameraOff={cameraOff} avatarUrl={participant.avatarUrl} />
                 <span className="absolute bottom-3 left-3 rounded-full bg-black/45 px-3 py-1 text-sm">{participant.displayName}</span>
               </div>;
             })}
