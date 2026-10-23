@@ -28,7 +28,8 @@ import { env } from "./env";
 
 export interface User {
   id: number;
-  phone: string;
+  phone: string | null;
+  email: string | null;
   username: string | null;
   display_name: string | null;
   avatar_url: string | null;
@@ -211,10 +212,12 @@ export interface Contact {
 
 export interface UserSearchResult {
   id: number;
-  phone: string;
+  phone: string | null;
+  email: string | null;
   display_name: string | null;
   avatar_url: string | null;
   already_contact: boolean;
+  already_member?: boolean;
 }
 
 // --- error -----------------------------------------------------------------
@@ -286,16 +289,16 @@ async function apiFetch<T>(
 
 // --- auth endpoints ---------------------------------------------------------
 
-export const requestOtp = (phone: string, recaptchaToken: string) =>
-  apiFetch<{ session_info: string }>("/auth/request-otp", {
+export const requestOtp = (destination: { phone: string; recaptcha_token: string } | { email: string }) =>
+  apiFetch<{ channel: "phone" | "email"; session_info?: string | null }>("/auth/request-otp", {
     method: "POST",
-    body: { phone, recaptcha_token: recaptchaToken },
+    body: destination,
   });
 
-export const verifyOtp = (phone: string, sessionInfo: string, code: string) =>
+export const verifyOtp = (destination: { phone: string; session_info: string; code: string } | { email: string; firebase_id_token: string }) =>
   apiFetch<VerifyOtpResponse>("/auth/verify-otp", {
     method: "POST",
-    body: { phone, session_info: sessionInfo, code },
+    body: destination,
   });
 
 export const getMe = () =>
@@ -388,14 +391,13 @@ export const listContacts = () =>
   apiFetch<Contact[]>("/contacts", { method: "GET" });
 
 /**
- * `POST /contacts`. Adds a contact by phone (the only lookup key in
- * Phase 4 — no username support). Returns the (new or existing)
+ * `POST /contacts`. Adds a contact by verified phone or email. Returns the (new or existing)
  * `ConversationOut` so the caller can select it.
  */
-export const addContact = (phone: string) =>
+export const addContact = (destination: string) =>
   apiFetch<Conversation>("/contacts", {
     method: "POST",
-    body: { phone },
+    body: destination.includes("@") ? { email: destination } : { phone: destination },
   });
 
 /** `GET /users/search?q=&conversation_id=`. Empty `q` returns `[]` per

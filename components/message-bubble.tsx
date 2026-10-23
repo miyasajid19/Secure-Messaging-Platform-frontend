@@ -291,7 +291,7 @@ export function MessageBubble({
         <Avatar
           subject={{
             avatar_url: message.sender.avatar_url ?? "",
-            display_name: message.sender.display_name ?? message.sender.phone,
+            display_name: message.sender.display_name ?? message.sender.phone ?? message.sender.email ?? "Signal user",
             last_seen: message.sender.last_seen,
           }}
           size={28}

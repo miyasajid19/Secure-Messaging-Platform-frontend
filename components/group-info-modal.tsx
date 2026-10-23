@@ -487,15 +487,15 @@ export function GroupInfoModal({
                             <Avatar
                               subject={{
                                 avatar_url: u.avatar_url ?? "",
-                                display_name: u.display_name ?? u.phone,
+                                display_name: u.display_name ?? u.phone ?? u.email ?? "Signal user",
                               }}
                             />
                             <div className="flex min-w-0 flex-1 flex-col">
                               <span className="truncate text-sm font-medium text-[var(--color-fg-primary)]">
-                                {u.display_name ?? u.phone}
+                                {u.display_name ?? u.phone ?? u.email ?? "Signal user"}
                               </span>
                               <span className="truncate text-xs text-[var(--color-fg-muted)]">
-                                {u.phone}
+                                {u.phone ?? u.email}
                               </span>
                             </div>
                             <UserPlus size={14} className="text-[var(--color-accent)]" />
@@ -520,14 +520,14 @@ export function GroupInfoModal({
                     <Avatar
                       subject={{
                         avatar_url: p.avatar_url ?? "",
-                        display_name: p.display_name ?? p.phone ?? "?",
+                        display_name: p.display_name ?? p.phone ?? p.email ?? "?",
                         last_seen: p.last_seen ?? null,
                       }}
                       online={online}
                     />
                     <div className="flex min-w-0 flex-1 flex-col">
                       <span className="truncate text-sm font-medium text-[var(--color-fg-primary)]">
-                        {p.display_name ?? p.phone}
+                        {p.display_name ?? p.phone ?? p.email ?? "Signal user"}
                         {isSelf ? (
                           <span className="ml-1 text-xs text-[var(--color-fg-muted)]">
                             (you)
@@ -535,7 +535,7 @@ export function GroupInfoModal({
                         ) : null}
                       </span>
                       <span className="truncate text-[11px] text-[var(--color-fg-muted)]">
-                        {online ? "online" : p.phone}
+                      {online ? "online" : p.phone ?? p.email}
                       </span>
                     </div>
                     {isParticipantAdmin ? (
@@ -560,7 +560,7 @@ export function GroupInfoModal({
                           type="button"
                           disabled={removeMutation.isPending}
                           onClick={() => removeMutation.mutate(p.id)}
-                          aria-label={`Remove ${p.display_name ?? p.phone}`}
+                          aria-label={`Remove ${p.display_name ?? p.phone ?? p.email ?? "Signal user"}`}
                           className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-status-error)] disabled:opacity-50"
                         >
                           <UserMinus size={14} />

@@ -562,6 +562,7 @@ function normalizeIncoming(raw: BackendMessageOut): Message | null {
       raw.sender ?? {
         id: senderId,
         phone: "",
+        email: null,
         username: null,
         display_name: null,
         avatar_url: null,

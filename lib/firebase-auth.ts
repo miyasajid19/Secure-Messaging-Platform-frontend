@@ -1,7 +1,13 @@
 "use client";
 
 import { getApp, getApps, initializeApp, type FirebaseApp } from "firebase/app";
-import { getAuth, RecaptchaVerifier, type Auth } from "firebase/auth";
+import {
+  getAuth,
+  isSignInWithEmailLink,
+  RecaptchaVerifier,
+  signInWithEmailLink,
+  type Auth,
+} from "firebase/auth";
 
 let firebaseApp: FirebaseApp | null = null;
 let recaptchaVerifier: RecaptchaVerifier | null = null;
@@ -44,4 +50,14 @@ export async function getPhoneAuthRecaptchaToken(containerId: string): Promise<s
 
 export function firebasePhoneError(error: unknown): string {
   return error instanceof Error ? error.message : "Phone verification failed.";
+}
+
+/** Complete a Firebase email link and return its signed Firebase ID token.
+ * The app backend validates that token before issuing its own session JWT.
+ */
+export async function completeFirebaseEmailLink(email: string, link: string): Promise<string> {
+  const auth = getFirebaseAuth();
+  if (!isSignInWithEmailLink(auth, link)) throw new Error("This is not a valid Firebase email sign-in link.");
+  const credential = await signInWithEmailLink(auth, email, link);
+  return credential.user.getIdToken();
 }

@@ -470,7 +470,8 @@ function AccountPanel() {
     setPhoneBusy(true);
     try {
       const recaptchaToken = await getPhoneAuthRecaptchaToken("settings-phone-recaptcha");
-      const { session_info } = await requestOtp(phone, recaptchaToken);
+      const { session_info } = await requestOtp({ phone, recaptcha_token: recaptchaToken });
+      if (!session_info) throw new Error("The server did not create a phone verification session");
       setPhoneOtpSession(session_info);
       setPhoneOtpRequested(true);
       toast.success(`Verification code sent to ${phone}`);
@@ -514,7 +515,7 @@ function AccountPanel() {
           Account
         </h2>
         <div className="flex items-center gap-4 rounded-xl border p-3 sm:p-4" style={{ borderColor: "var(--color-border-subtle)" }}>
-          <Avatar subject={{ avatar_url: photoPreview || me.avatar_url || "", display_name: me.display_name ?? me.username ?? me.phone }} size={64} showOnline={false} />
+          <Avatar subject={{ avatar_url: photoPreview || me.avatar_url || "", display_name: me.display_name ?? me.username ?? me.phone ?? me.email ?? "Signal user" }} size={64} showOnline={false} />
           <div className="min-w-0">
             <p className="text-sm font-medium text-[var(--color-fg-primary)]">Profile photo</p>
             <p className="mt-0.5 text-xs text-[var(--color-fg-muted)]">Choose an image up to 5 MB.</p>

@@ -26,7 +26,8 @@ const USER_KEY = "signal-clone:user";
 
 interface StoredUser {
   id: number;
-  phone: string;
+  phone: string | null;
+  email: string | null;
   username: string | null;
   display_name: string | null;
   avatar_url: string | null;

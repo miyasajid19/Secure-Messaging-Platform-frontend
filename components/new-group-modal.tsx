@@ -42,7 +42,8 @@ const DEBOUNCE_MS = 150;
 interface PickedMember {
   id: number;
   display_name: string | null;
-  phone: string;
+  phone: string | null;
+  email: string | null;
   avatar_url: string | null;
 }
 
@@ -173,6 +174,7 @@ export function NewGroupModal({ open, onClose, currentUserId }: Props) {
               id: u.id,
               display_name: u.display_name,
               phone: u.phone,
+              email: u.email,
               avatar_url: u.avatar_url,
             },
           ],
@@ -298,11 +300,11 @@ export function NewGroupModal({ open, onClose, currentUserId }: Props) {
                   key={p.id}
                   className="flex items-center gap-1 rounded-full bg-[var(--color-bg-tertiary)] px-2 py-1 text-xs text-[var(--color-fg-primary)]"
                 >
-                  {p.display_name ?? p.phone}
+                  {p.display_name ?? p.phone ?? p.email ?? "Signal user"}
                   <button
                     type="button"
-                    onClick={() => togglePick({ id: p.id, phone: p.phone, display_name: p.display_name, avatar_url: p.avatar_url, already_contact: false, already_member: false } as UserSearchResult)}
-                    aria-label={`Remove ${p.display_name ?? p.phone}`}
+                    onClick={() => togglePick({ id: p.id, phone: p.phone, email: p.email, display_name: p.display_name, avatar_url: p.avatar_url, already_contact: false, already_member: false } as UserSearchResult)}
+                    aria-label={`Remove ${p.display_name ?? p.phone ?? p.email ?? "Signal user"}`}
                     className="ml-1 flex h-4 w-4 items-center justify-center rounded-full text-[var(--color-fg-muted)] hover:bg-[var(--color-fg-secondary)]/30"
                   >
                     <X size={10} />
@@ -338,15 +340,15 @@ export function NewGroupModal({ open, onClose, currentUserId }: Props) {
                       <Avatar
                         subject={{
                           avatar_url: u.avatar_url ?? "",
-                          display_name: u.display_name ?? u.phone,
+                          display_name: u.display_name ?? u.phone ?? u.email ?? "Signal user",
                         }}
                       />
                       <div className="flex min-w-0 flex-1 flex-col">
                         <span className="truncate text-sm font-medium text-[var(--color-fg-primary)]">
-                          {u.display_name ?? u.phone}
+                          {u.display_name ?? u.phone ?? u.email ?? "Signal user"}
                         </span>
                         <span className="truncate text-xs text-[var(--color-fg-muted)]">
-                          {u.phone}
+                          {u.phone ?? u.email}
                         </span>
                       </div>
                       <Plus

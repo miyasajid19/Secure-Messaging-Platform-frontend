@@ -268,7 +268,7 @@ export function ConversationListPane({
                 <li key={user.id}><NewChatUserRow user={user} disabled={addContactMutation.isPending} onClick={() => {
                   const existing = conversations.find((conv) => conv.type === "direct" && conv.participants.some((person) => person.id === user.id));
                   if (existing) { setSelected(existing.id); setShowNewChat(false); }
-                  else if (!user.already_contact) addContactMutation.mutate(user.phone);
+                  else if (!user.already_contact && (user.phone || user.email)) addContactMutation.mutate(user.phone ?? user.email!);
                   else toast.error("This contact has no conversation yet.");
                 }} /></li>
               )) : <li className="px-3 py-6 text-center text-sm text-[var(--color-fg-muted)]">No matches.</li>
@@ -425,16 +425,16 @@ function UsersGlyph() { return <Users size={21} />; }
 
 function NewChatUserRow({ user, disabled, onClick }: { user: UserSearchResult; disabled: boolean; onClick: () => void }) {
   return <button type="button" disabled={disabled} onClick={onClick} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition hover:bg-[var(--color-bg-tertiary)] disabled:opacity-60">
-    <Avatar subject={{ avatar_url: user.avatar_url, display_name: user.display_name ?? user.phone }} />
-    <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-[var(--color-fg-primary)]">{user.display_name ?? user.phone}</span><span className="block truncate text-xs text-[var(--color-fg-muted)]">{user.phone}</span></span>
+    <Avatar subject={{ avatar_url: user.avatar_url, display_name: user.display_name ?? user.phone ?? user.email ?? "Signal user" }} />
+    <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-[var(--color-fg-primary)]">{user.display_name ?? user.phone ?? user.email ?? "Signal user"}</span><span className="block truncate text-xs text-[var(--color-fg-muted)]">{user.phone ?? user.email}</span></span>
     {user.already_contact ? <span className="text-xs text-[var(--color-fg-muted)]">Added</span> : <span className="text-[var(--color-fg-secondary)]"><Plus size={18} /></span>}
   </button>;
 }
 
 function ContactRow({ contact, onClick }: { contact: Contact; onClick: () => void }) {
   return <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition hover:bg-[var(--color-bg-tertiary)]">
-    <Avatar subject={{ avatar_url: contact.contact.avatar_url, display_name: contact.nickname ?? contact.contact.display_name ?? contact.contact.phone }} />
-    <span className="truncate text-sm font-medium text-[var(--color-fg-primary)]">{contact.nickname ?? contact.contact.display_name ?? contact.contact.phone}</span>
+    <Avatar subject={{ avatar_url: contact.contact.avatar_url, display_name: contact.nickname ?? contact.contact.display_name ?? contact.contact.phone ?? contact.contact.email ?? "Signal user" }} />
+    <span className="truncate text-sm font-medium text-[var(--color-fg-primary)]">{contact.nickname ?? contact.contact.display_name ?? contact.contact.phone ?? contact.contact.email ?? "Signal user"}</span>
   </button>;
 }
 
@@ -446,6 +446,7 @@ function matches(conv: Conversation, q: string): boolean {
     for (const p of conv.participants) {
       if (p.display_name && p.display_name.toLowerCase().includes(q)) return true;
       if (p.phone && p.phone.toLowerCase().includes(q)) return true;
+      if (p.email && p.email.toLowerCase().includes(q)) return true;
     }
   }
   // Also surface in preview text so users can search message contents.

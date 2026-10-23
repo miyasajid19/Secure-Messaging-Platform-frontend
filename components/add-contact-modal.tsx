@@ -94,7 +94,7 @@ export function AddContactModal({ open, onClose }: Props) {
   });
 
   const addMutation = useMutation({
-    mutationFn: (phone: string) => addContact(phone),
+    mutationFn: (destination: string) => addContact(destination),
     onSuccess: (conversation) => {
       const addedName = conversation.name ?? "contact";
       void queryClient.invalidateQueries({ queryKey: queryKeys.conversations });
@@ -107,7 +107,7 @@ export function AddContactModal({ open, onClose }: Props) {
       if (err instanceof ApiError && err.status === 409) {
         setInlineError("Already in your contacts");
       } else if (err instanceof ApiError && err.status === 404) {
-        setInlineError("No user found with that phone");
+        setInlineError("No user found with that phone or email");
       } else {
         const msg = err instanceof Error ? err.message : "Couldn't add contact";
         toast.error(msg);
@@ -216,7 +216,7 @@ export function AddContactModal({ open, onClose }: Props) {
                     key={u.id}
                     user={u}
                     disabled={u.already_contact || addMutation.isPending}
-                    onAdd={() => addMutation.mutate(u.phone)}
+                    onAdd={() => addMutation.mutate(u.phone ?? u.email ?? "")}
                   />
                 ))}
               </ul>
@@ -237,21 +237,22 @@ function ResultRow({
   disabled: boolean;
   onAdd: () => void;
 }) {
-  const initials = (user.display_name ?? user.phone).slice(0, 2).toUpperCase();
+  const label = user.display_name ?? user.phone ?? user.email ?? "Signal user";
+  const initials = label.slice(0, 2).toUpperCase();
   return (
     <li className="flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-[var(--color-bg-tertiary)]">
       <Avatar
         subject={{
           avatar_url: user.avatar_url ?? "",
-          display_name: user.display_name ?? user.phone,
+          display_name: label,
         }}
       />
       <div className="flex min-w-0 flex-1 flex-col">
         <span className="truncate text-sm font-medium text-[var(--color-fg-primary)]">
-          {user.display_name ?? user.phone}
+          {label}
         </span>
         <span className="truncate text-xs text-[var(--color-fg-muted)]">
-          {user.phone}
+          {user.phone ?? user.email}
         </span>
       </div>
       {user.already_contact ? (
@@ -267,7 +268,7 @@ function ResultRow({
           type="button"
           onClick={onAdd}
           disabled={disabled}
-          aria-label={`Add ${user.display_name ?? user.phone}`}
+          aria-label={`Add ${label}`}
           className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--color-accent-fg)] disabled:cursor-not-allowed disabled:opacity-60"
           style={{ backgroundColor: "var(--color-accent)" }}
         >
