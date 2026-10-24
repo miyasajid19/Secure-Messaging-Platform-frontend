@@ -53,10 +53,54 @@ type MiniCallCardProps = {
 function MiniCallCard({ call, participants, streams, duration, self, onRestore, onMute, onCamera, onEnd, onAccept, onPictureInPicture }: MiniCallCardProps) {
   const cardRef = useRef<HTMLElement>(null);
   const dragRef = useRef<{ pointerId: number; startX: number; startY: number; left: number; top: number; moved: boolean } | null>(null);
+  const resizeRef = useRef<{ pointerId: number; startX: number; startY: number; left: number; top: number; width: number; height: number } | null>(null);
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
+  const [size, setSize] = useState({ width: 340, height: call.mediaType === "video" ? 230 : 140 });
+  const [isMobile, setIsMobile] = useState(false);
+  const [layoutLoaded, setLayoutLoaded] = useState(false);
   const firstParticipant = participants[0];
   const ringing = call.direction === "incoming" && call.status === "ringing";
   const isVideo = call.mediaType === "video";
+  const storageKey = `signal-clone:minimized-call-window:${call.mediaType}`;
+
+  useEffect(() => {
+    const loadLayout = () => {
+      setIsMobile(window.innerWidth < 640);
+      try {
+        const saved = localStorage.getItem(storageKey);
+        if (saved) {
+          const layout = JSON.parse(saved) as { left?: number; top?: number; width?: number; height?: number };
+          if (typeof layout.width === "number" && Number.isFinite(layout.width) && typeof layout.height === "number" && Number.isFinite(layout.height)) {
+            setSize({ width: Math.min(640, Math.max(280, layout.width)), height: Math.min(520, Math.max(isVideo ? 220 : 126, layout.height)) });
+          }
+          if (typeof layout.left === "number" && Number.isFinite(layout.left) && typeof layout.top === "number" && Number.isFinite(layout.top)) {
+            setPosition({ left: Math.max(12, layout.left), top: Math.max(12, layout.top) });
+          }
+        }
+      } catch { /* Ignore an invalid saved layout. */ }
+      setLayoutLoaded(true);
+    };
+    loadLayout();
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 640);
+      const card = cardRef.current;
+      if (!card || window.innerWidth < 640) return;
+      const rect = card.getBoundingClientRect();
+      setPosition((current) => current ? {
+        left: Math.min(current.left, window.innerWidth - rect.width - 12),
+        top: Math.min(current.top, window.innerHeight - rect.height - 12),
+      } : current);
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [isVideo, storageKey]);
+
+  useEffect(() => {
+    if (!layoutLoaded) return;
+    try {
+      localStorage.setItem(storageKey, JSON.stringify({ ...position, ...size }));
+    } catch { /* Storage may be unavailable; the floating call still works. */ }
+  }, [layoutLoaded, position, size, storageKey]);
   const startDrag = (event: ReactPointerEvent<HTMLElement>) => {
     if (window.innerWidth < 640 || (event.target instanceof Element && event.target.closest("button"))) return;
     const rect = cardRef.current?.getBoundingClientRect();
@@ -89,10 +133,28 @@ function MiniCallCard({ call, participants, streams, duration, self, onRestore, 
     }
     dragRef.current = null;
   };
-  const positionStyle = position ? { left: position.left, top: position.top } : undefined;
-  return <section ref={cardRef} style={positionStyle} aria-label={`${isVideo ? "Video" : "Voice"} call, minimized`} className={`fixed z-[100] w-[min(340px,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-primary)] text-[var(--color-fg-primary)] shadow-2xl max-sm:bottom-24 max-sm:right-2 max-sm:w-[calc(100vw-1rem)] ${position ? "" : "bottom-24 right-4"}`}>
+  const startResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const rect = cardRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    resizeRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setPosition({ left: rect.left, top: rect.top });
+  };
+  const moveResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const resize = resizeRef.current;
+    if (!resize || resize.pointerId !== event.pointerId) return;
+    const maxWidth = Math.min(640, window.innerWidth - resize.left - 12);
+    const maxHeight = Math.min(520, window.innerHeight - resize.top - 12);
+    setSize({ width: Math.min(Math.max(280, resize.width + event.clientX - resize.startX), maxWidth), height: Math.min(Math.max(isVideo ? 220 : 126, resize.height + event.clientY - resize.startY), maxHeight) });
+  };
+  const finishResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (resizeRef.current?.pointerId === event.pointerId) resizeRef.current = null;
+  };
+  const positionStyle = !isMobile && position ? { left: position.left, top: position.top } : undefined;
+  const sizeStyle = !layoutLoaded || isMobile ? undefined : { width: size.width, height: size.height };
+  return <section ref={cardRef} style={{ ...sizeStyle, ...positionStyle }} aria-label={`${isVideo ? "Video" : "Voice"} call, minimized`} className={`fixed z-[100] flex w-[min(340px,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-primary)] text-[var(--color-fg-primary)] shadow-2xl max-sm:bottom-24 max-sm:right-2 max-sm:h-auto max-sm:w-[calc(100vw-1rem)] ${!isMobile && position ? "" : "bottom-24 right-4"}`}>
     {isVideo ? <>
-    <div className="relative hidden h-40 touch-none cursor-grab bg-neutral-950 active:cursor-grabbing sm:block" onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={finishDrag} onPointerCancel={finishDrag}>
+    <div className="relative hidden min-h-0 flex-1 touch-none cursor-grab bg-neutral-950 active:cursor-grabbing sm:block" onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={finishDrag} onPointerCancel={finishDrag}>
       {firstParticipant ? <RemoteVideo stream={streams[firstParticipant.id]} name={firstParticipant.displayName} cameraOff={call.isGroup ? Boolean(call.peerCameraOffById[firstParticipant.id]) : call.peerCameraOff} avatarUrl={firstParticipant.avatarUrl} /> : <div className="flex h-full items-center justify-center"><Avatar subject={{ avatar_url: call.peerAvatarUrl, display_name: call.peerName }} size={80} showOnline={false} /></div>}
       <div className="absolute inset-x-0 bottom-0 flex items-end justify-between bg-gradient-to-t from-black/75 to-transparent p-3 text-white">
         <div className="min-w-0"><p className="truncate text-sm font-semibold">{call.peerName}</p><p className="text-xs text-white/75">{call.status === "active" ? duration : ringing ? "Incoming video call" : "Connecting…"}</p></div>
@@ -104,7 +166,7 @@ function MiniCallCard({ call, participants, streams, duration, self, onRestore, 
       <button type="button" onClick={onRestore} className="min-w-0 flex-1 text-left" aria-label="Restore full-screen call"><span className="block truncate text-sm font-semibold">{call.peerName}</span><span className="block text-xs text-[var(--color-fg-secondary)]">{call.status === "active" ? duration : ringing ? "Incoming video call" : "Connecting…"}</span></button>
       <button type="button" onClick={onRestore} aria-label="Restore full-screen call" className="rounded-lg p-2 text-[var(--color-fg-secondary)]"><Maximize2 size={17} /></button>
     </div>
-    </> : <div className="flex items-center gap-3 p-3 touch-none cursor-grab active:cursor-grabbing" onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={finishDrag} onPointerCancel={finishDrag}>
+    </> : <div className="flex flex-1 items-center gap-3 p-3 touch-none cursor-grab active:cursor-grabbing" onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={finishDrag} onPointerCancel={finishDrag}>
       {call.isGroup ? <div className="flex -space-x-3">{participants.slice(0, 3).map((participant) => <Avatar key={participant.id} subject={{ avatar_url: participant.avatarUrl, display_name: participant.displayName }} size={42} showOnline={false} />)}</div> : <Avatar subject={{ avatar_url: call.peerAvatarUrl, display_name: call.peerName }} size={44} showOnline={false} />}
       <button type="button" onClick={onRestore} className="min-w-0 flex-1 text-left" aria-label="Restore full-screen call"><span className="block truncate text-sm font-semibold">{call.peerName}</span><span className="block text-xs text-[var(--color-fg-secondary)]">{call.status === "active" ? duration : ringing ? "Incoming voice call" : "Connecting…"}</span></button>
       <button type="button" onClick={onRestore} aria-label="Restore full-screen call" title="Return to call" className="rounded-lg p-2 text-[var(--color-fg-secondary)] transition hover:bg-[var(--color-bg-tertiary)]"><Maximize2 size={17} /></button>
@@ -120,6 +182,7 @@ function MiniCallCard({ call, participants, streams, duration, self, onRestore, 
         <button type="button" onClick={onEnd} aria-label="End call" className="flex h-10 w-10 items-center justify-center rounded-full bg-red-600 text-white hover:bg-red-700"><PhoneOff size={18} /></button>
       </>}
     </div>
+    <button type="button" aria-label="Resize call window" title="Drag to resize" onPointerDown={startResize} onPointerMove={moveResize} onPointerUp={finishResize} onPointerCancel={finishResize} className="absolute bottom-0 right-0 hidden h-5 w-5 cursor-nwse-resize touch-none sm:block" style={{ background: "linear-gradient(135deg, transparent 50%, var(--color-border-default) 50%, var(--color-border-default) 58%, transparent 58%, transparent 68%, var(--color-border-default) 68%, var(--color-border-default) 76%, transparent 76%)" }} />
     {self ? <span className="sr-only">Signed in as {self.display_name ?? self.username ?? "you"}</span> : null}
   </section>;
 }
