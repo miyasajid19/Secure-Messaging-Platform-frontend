@@ -42,6 +42,8 @@ import { send as realtimeSend } from "@/lib/realtime";
 import { useRealtimeStore } from "@/store/realtime";
 import { useReplyStore } from "@/store/reply";
 import { useDraftStore } from "@/store/drafts";
+import { useQuery } from "@tanstack/react-query";
+import { getAppSettings } from "@/lib/api";
 
 interface Props {
   conversationId: number | null;
@@ -56,6 +58,7 @@ const TYPING_IDLE_MS = 6_000;
 const COMPOSER_EMOJIS = ["😀", "😂", "🥰", "😊", "😍", "😎", "🤔", "😢", "😮", "🙏", "👍", "👎", "👏", "🙌", "❤️", "🔥", "🎉", "✅", "💯", "😅", "😭", "🤝", "✨", "🚀"];
 
 export function Composer({ conversationId, currentUser, onSend }: Props) {
+  const preferences = useQuery({ queryKey: queryKeys.appSettings, queryFn: getAppSettings, enabled: Boolean(currentUser?.id) });
   const [value, setValue] = useState("");
   const [composing, setComposing] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
@@ -342,6 +345,7 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Enter" && !event.shiftKey && !composing) {
+      if (preferences.data?.general.enter_to_send === false) return;
       event.preventDefault();
       // Phase 6 §1: don't submit while WS is still connecting.
       if (!wsReady) {
@@ -476,6 +480,7 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
         onKeyDown={onKeyDown}
         onCompositionStart={() => setComposing(true)}
         onCompositionEnd={() => setComposing(false)}
+        spellCheck={preferences.data?.general.spell_check ?? true}
         disabled={!conversationId || uploading}
         className="min-h-9 min-w-0 flex-1 resize-none rounded-2xl border bg-[var(--color-bg-primary)] px-3 py-2 text-sm text-[var(--color-fg-primary)] outline-none focus:ring-2 focus:ring-[var(--color-accent)] disabled:opacity-60"
         style={{

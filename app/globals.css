@@ -16,3 +16,12 @@ body {
   color: var(--color-fg-primary);
   font-family: var(--font-sans), system-ui, sans-serif;
 }
+
+html[data-reduce-motion="true"] *,
+html[data-reduce-motion="true"] *::before,
+html[data-reduce-motion="true"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  scroll-behavior: auto !important;
+  transition-duration: 0.01ms !important;
+}

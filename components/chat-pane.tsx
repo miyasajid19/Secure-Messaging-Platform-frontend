@@ -57,6 +57,7 @@ import {
   queryKeys,
   sendMessage,
   type Conversation,
+  type AppSettings,
   type Message,
   blockUser,
   deleteConversationForMe,
@@ -646,7 +647,8 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
 
   async function handleDeleteChat() {
     setChatMenuOpen(false);
-    if (!window.confirm("Delete this chat from your conversation list? Messages remain visible to other participants.")) return;
+    const confirmDelete = getQueryClient().getQueryData<AppSettings>(queryKeys.appSettings)?.chats.confirm_before_delete !== false;
+    if (confirmDelete && !window.confirm("Delete this chat from your conversation list? Messages remain visible to other participants.")) return;
     try {
       await deleteConversationForMe(cid);
       setSelectedConversation(null);

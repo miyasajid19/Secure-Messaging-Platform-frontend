@@ -37,6 +37,22 @@ export interface User {
   last_seen: string | null;
 }
 
+export interface AppSettings {
+  general: { enter_to_send: boolean; spell_check: boolean; reduce_motion: boolean };
+  chats: { confirm_before_delete: boolean; default_disappearing_seconds: number | null };
+  calls: { ringtone_enabled: boolean };
+  notifications: { enabled: boolean; sound_enabled: boolean; desktop_enabled: boolean };
+  privacy: { read_receipts: boolean; typing_indicators: boolean };
+  appearance: { theme: "light" | "dark" };
+}
+export type AppSettingsPatch = { [K in keyof AppSettings]?: Partial<AppSettings[K]> };
+export const getAppSettings = () => apiFetch<AppSettings>("/settings", { method: "GET" });
+export const patchAppSettings = (patch: AppSettingsPatch) => apiFetch<AppSettings>("/settings", { method: "PATCH", body: patch });
+export interface DataUsage { conversations: number; messages: number; attachments: number; attachment_bytes: number; stories: number }
+export const getDataUsage = () => apiFetch<DataUsage>("/settings/data-usage", { method: "GET" });
+export const getBlockedUsers = () => apiFetch<User[]>("/settings/blocked-users", { method: "GET" });
+export const getBackup = () => apiFetch<Record<string, unknown>>("/settings/backup", { method: "GET" });
+
 export interface Story {
   id: number;
   user: { id: number; display_name: string | null; username: string | null; avatar_url: string | null };
@@ -752,6 +768,9 @@ export function getQueryClient(): QueryClient {
 
 export const queryKeys = {
   me: ["auth", "me"] as const,
+  appSettings: ["settings", "app"] as const,
+  dataUsage: ["settings", "data-usage"] as const,
+  blockedUsers: ["settings", "blocked-users"] as const,
   conversations: ["conversations"] as const,
   messages: (conversationId: number | null) =>
     ["messages", conversationId] as const,

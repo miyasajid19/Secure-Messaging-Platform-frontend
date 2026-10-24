@@ -24,8 +24,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "sonner";
 import { useAuthStore } from "@/store/auth";
-import { getOnlineUsers, setQueryClient } from "@/lib/api";
-import { queryKeys, type Conversation } from "@/lib/api";
+import { getAppSettings, getOnlineUsers, setQueryClient } from "@/lib/api";
+import { queryKeys, type AppSettings, type Conversation } from "@/lib/api";
 import { useRealtimeStore } from "@/store/realtime";
 import { useUiStore } from "@/store/ui";
 import { connect, disconnect, subscribeToIncomingMessages } from "@/lib/realtime";
@@ -122,17 +122,27 @@ export function Providers({ children }: { children: ReactNode }) {
     playChimeRef.current = sound.playChime;
   }, [sound.playChime]);
   useEffect(() => {
+    const settings = queryClient.getQueryData<AppSettings>(queryKeys.appSettings);
+    if (settings) document.documentElement.dataset.reduceMotion = String(settings.general.reduce_motion);
+  }, [queryClient]);
+
+  useEffect(() => {
     return subscribeToIncomingMessages((message) => {
       const myUserId = useAuthStore.getState().user?.id ?? null;
       if (myUserId == null || message.sender_id === myUserId) return;
       const activeId = useUiStore.getState().selectedConversationId;
       if (activeId === message.conversation_id) return;
+      const settings = queryClient.getQueryData<AppSettings>(queryKeys.appSettings);
+      if (settings?.notifications.enabled === false) return;
       const muted = queryClient.getQueriesData<Conversation[]>({ queryKey: queryKeys.conversations })
         .some(([, conversations]) => conversations?.some((conversation) => conversation.id === message.conversation_id && conversation.muted));
       if (muted) return;
       playChimeRef.current();
+      if (settings?.notifications.desktop_enabled && document.hidden && "Notification" in window && Notification.permission === "granted") {
+        new Notification("New message", { body: "You received a new message." });
+      }
     });
-  }, []);
+  }, [queryClient]);
 
   // Hydrate auth from localStorage exactly once on mount. This runs in
   // the browser, so `window.localStorage` is always available here.
@@ -143,6 +153,24 @@ export function Providers({ children }: { children: ReactNode }) {
 
   // Subscribe to the token so the WS opens/closes alongside login.
   const token = useAuthStore((s) => s.token);
+  useEffect(() => {
+    if (!token) {
+      queryClient.removeQueries({ queryKey: queryKeys.appSettings });
+      return;
+    }
+    let cancelled = false;
+    void queryClient.fetchQuery({ queryKey: queryKeys.appSettings, queryFn: getAppSettings }).then((settings) => {
+      if (cancelled) return;
+      document.documentElement.dataset.reduceMotion = String(settings.general.reduce_motion);
+      if (settings.appearance.theme === "dark") document.documentElement.dataset.theme = "dark";
+      else delete document.documentElement.dataset.theme;
+      window.localStorage.setItem("signal-clone:theme", settings.appearance.theme);
+    }).catch(() => {
+      // A settings fetch can fail during logout or if the API is offline.
+      // Components keep their local defaults and can retry on the next view.
+    });
+    return () => { cancelled = true; };
+  }, [queryClient, token]);
   useEffect(() => {
     if (!token) {
       disconnect();

@@ -12,10 +12,11 @@ import {
 } from "react";
 import { Camera, CameraOff, Maximize2, Mic, MicOff, Minimize2, MonitorOff, MonitorUp, Phone, PhoneOff, PictureInPicture2, Signal, UserPlus, Video, X } from "lucide-react";
 import { toast } from "sonner";
+import { useQuery } from "@tanstack/react-query";
 import { Avatar } from "@/components/avatar";
 import { useAuthStore } from "@/store/auth";
 import { useRealtimeStore, type ActiveGroupCall } from "@/store/realtime";
-import { createGroup, getIceServers, getQueryClient, listContacts, listConversations, queryKeys, type Contact, type IceServer } from "@/lib/api";
+import { createGroup, getAppSettings, getIceServers, getQueryClient, listContacts, listConversations, queryKeys, type Contact, type IceServer } from "@/lib/api";
 import { isRealtimeConnected, sendCallSignal, subscribeToCallSignals, type CallSignal } from "@/lib/realtime";
 
 type CallState = {
@@ -298,6 +299,7 @@ export function useVoiceCall() {
 
 export function VoiceCallProvider({ children }: { children: ReactNode }) {
   const self = useAuthStore((state) => state.user);
+  const preferences = useQuery({ queryKey: queryKeys.appSettings, queryFn: getAppSettings, enabled: Boolean(self?.id) });
   const setActiveGroupCall = useRealtimeStore((state) => state.setActiveGroupCall);
   const clearActiveGroupCall = useRealtimeStore((state) => state.clearActiveGroupCall);
   const [call, setCall] = useState<CallState | null>(null);
@@ -783,6 +785,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
   }, [call?.callId, call?.isGroup, call?.participants, call?.status, createPeerConnection, self]);
   useEffect(() => {
     if (!call || call.status !== "ringing") return;
+    if (preferences.data?.calls.ringtone_enabled === false) return;
     const timer = window.setTimeout(() => {
       const current = callRef.current;
       if (!current || current.callId !== call.callId) return;
@@ -863,7 +866,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
       });
       void context.close().catch(() => {});
     };
-  }, [call?.callId, call?.direction, call?.status]);
+  }, [call?.callId, call?.direction, call?.status, preferences.data?.calls.ringtone_enabled]);
 
   useEffect(() => {
     if (!call?.startedAt) return;

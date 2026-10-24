@@ -39,6 +39,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/store/auth";
 import { queryKeys } from "@/lib/api";
 import { useNotificationSound } from "@/lib/notification-sound";
+import { getAppSettings, getBackup, getBlockedUsers, getDataUsage, patchAppSettings, unblockUser, type AppSettings, type AppSettingsPatch, type DataUsage } from "@/lib/api";
+import { useDraftStore } from "@/store/drafts";
 import { Avatar } from "@/components/avatar";
 import { PhoneNumberInput } from "@/components/auth/phone-number-input";
 
@@ -370,14 +372,12 @@ function SettingsPageInner() {
           {section === "privacy" ? <PrivacyPanel /> : null}
           {section === "notifications" ? <NotificationsPanel /> : null}
           {section === "appearance" ? <AppearancePanel /> : null}
-          {!["account", "privacy", "notifications", "appearance"].includes(
-            section,
-          ) ? (
-            <ComingSoonPanel
-              title={SECTIONS.find((item) => item.key === section)?.label ?? "Settings"}
-              description={SECTIONS.find((item) => item.key === section)?.description}
-            />
-          ) : null}
+          {section === "general" ? <GeneralPanel /> : null}
+          {section === "chats" ? <ChatsPanel /> : null}
+          {section === "calls" ? <CallsPanel /> : null}
+          {section === "data-usage" ? <DataUsagePanel /> : null}
+          {section === "backups" ? <BackupsPanel /> : null}
+          {section === "donate" ? <SupportPanel /> : null}
         </section>
       </div>
     </main>
@@ -584,199 +584,89 @@ function AccountPanel() {
   );
 }
 
-function ComingSoonPanel({
-  title,
-  description,
-}: {
-  title: string;
-  description?: string;
-}) {
-  return (
-    <div className="flex max-w-[480px] flex-col gap-3" aria-label={title}>
-      <h2 className="text-base font-semibold text-[var(--color-fg-primary)]">
-        {title}
-      </h2>
-      <div
-        className="rounded-lg border px-4 py-4"
-        style={{ borderColor: "var(--color-border-subtle)" }}
-      >
-        <p className="text-sm text-[var(--color-fg-secondary)]">
-          {description ?? `${title} settings are coming soon.`}
-        </p>
-        <span className="mt-3 inline-flex rounded-full bg-[var(--color-bg-tertiary)] px-2.5 py-1 text-xs text-[var(--color-fg-muted)]">
-          Coming soon
-        </span>
-      </div>
-    </div>
-  );
+function useSettings() {
+  const client = useQueryClient();
+  const token = useAuthStore((s) => s.token);
+  const query = useQuery({ queryKey: queryKeys.appSettings, queryFn: getAppSettings, enabled: Boolean(token) });
+  async function save(patch: AppSettingsPatch) {
+    try { const result = await patchAppSettings(patch); client.setQueryData(queryKeys.appSettings, result); return result; }
+    catch (error) { toast.error(error instanceof ApiError ? error.message : "Couldn't save setting"); throw error; }
+  }
+  return { settings: query.data, save };
+}
+
+function ToggleRow({ label, description, checked, onChange }: { label: string; description: string; checked: boolean; onChange: (checked: boolean) => void }) {
+  return <label className="flex cursor-pointer items-center justify-between gap-4 border-b px-4 py-3 last:border-0" style={{ borderColor: "var(--color-border-subtle)" }}><span><span className="block text-sm font-medium text-[var(--color-fg-primary)]">{label}</span><span className="block text-xs text-[var(--color-fg-muted)]">{description}</span></span><input aria-label={label} type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="h-4 w-4 accent-[var(--color-accent)]" /></label>;
+}
+
+function SettingsCard({ title, children }: { title: string; children: React.ReactNode }) {
+  return <section className="max-w-2xl" aria-label={title}><h2 className="mb-3 text-base font-semibold text-[var(--color-fg-primary)]">{title}</h2><div className="overflow-hidden rounded-xl border" style={{ borderColor: "var(--color-border-subtle)" }}>{children}</div></section>;
+}
+
+function GeneralPanel() {
+  const { settings, save } = useSettings();
+  const values = settings?.general;
+  return <SettingsCard title="General"><ToggleRow label="Enter to send" description="Press Enter to send; use Shift+Enter for a new line." checked={values?.enter_to_send ?? true} onChange={(v) => void save({ general: { enter_to_send: v } })} /><ToggleRow label="Spell check" description="Use your browser's spelling suggestions in the message composer." checked={values?.spell_check ?? true} onChange={(v) => void save({ general: { spell_check: v } })} /><ToggleRow label="Reduce motion" description="Reduce interface animations and transitions." checked={values?.reduce_motion ?? false} onChange={(v) => { document.documentElement.dataset.reduceMotion = String(v); void save({ general: { reduce_motion: v } }); }} /></SettingsCard>;
+}
+
+function ChatsPanel() {
+  const { settings, save } = useSettings();
+  return <SettingsCard title="Chats"><ToggleRow label="Confirm before deleting" description="Ask before removing a conversation from your chat list." checked={settings?.chats.confirm_before_delete ?? true} onChange={(v) => void save({ chats: { confirm_before_delete: v } })} /><label className="flex items-center justify-between gap-4 px-4 py-3"><span><span className="block text-sm font-medium text-[var(--color-fg-primary)]">Default disappearing messages</span><span className="text-xs text-[var(--color-fg-muted)]">Applied when you create a new conversation.</span></span><select aria-label="Default disappearing messages" value={settings?.chats.default_disappearing_seconds ?? "off"} onChange={(e) => void save({ chats: { default_disappearing_seconds: e.target.value === "off" ? null : Number(e.target.value) } })} className="rounded-lg border bg-[var(--color-bg-primary)] px-2 py-2 text-sm" style={{ borderColor: "var(--color-border-subtle)", color: "var(--color-fg-primary)" }}><option value="off">Off</option><option value="3600">1 hour</option><option value="86400">24 hours</option><option value="604800">7 days</option></select></label></SettingsCard>;
+}
+
+function CallsPanel() {
+  const { settings, save } = useSettings();
+  return <SettingsCard title="Calls"><ToggleRow label="Incoming call ringtone" description="Play a ringtone in this browser when a call is ringing." checked={settings?.calls.ringtone_enabled ?? true} onChange={(v) => void save({ calls: { ringtone_enabled: v } })} /></SettingsCard>;
 }
 
 function PrivacyPanel() {
-  return (
-    <div className="flex max-w-[480px] flex-col gap-2" aria-label="Privacy">
-      <h2 className="text-base font-semibold text-[var(--color-fg-primary)]">
-        Privacy
-      </h2>
-      <ul className="flex flex-col divide-y rounded-lg border"
-          style={{ borderColor: "var(--color-border-subtle)" }}>
-        {[
-          { label: "Read receipts", desc: "Let others know when you've read their messages." },
-          { label: "Typing indicators", desc: "Show others when you're typing." },
-          { label: "Blocked users", desc: "Manage users you've blocked." },
-          { label: "Linked devices", desc: "View and manage devices signed in to your account." },
-          { label: "End-to-end encryption", desc: "Keep conversations private between participants." },
-        ].map((item) => (
-          <li
-            key={item.label}
-            className="flex items-center justify-between gap-3 px-4 py-3"
-          >
-            <div>
-              <p className="text-sm font-medium text-[var(--color-fg-primary)]">
-                {item.label}
-              </p>
-              <p className="text-xs text-[var(--color-fg-muted)]">{item.desc}</p>
-            </div>
-            <button
-              type="button"
-              disabled
-              aria-label={`${item.label} — coming soon`}
-              className="shrink-0 cursor-not-allowed rounded-full border px-3 py-1 text-xs text-[var(--color-fg-muted)]"
-              style={{ borderColor: "var(--color-border-subtle)" }}
-            >
-              Coming soon
-            </button>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
+  const { settings, save } = useSettings();
+  const client = useQueryClient();
+  const token = useAuthStore((s) => s.token);
+  const blocked = useQuery({ queryKey: queryKeys.blockedUsers, queryFn: getBlockedUsers, enabled: Boolean(token) });
+  async function unblock(id: number) { try { await unblockUser(id); await client.invalidateQueries({ queryKey: queryKeys.blockedUsers }); toast.success("User unblocked"); } catch (error) { toast.error(error instanceof ApiError ? error.message : "Couldn't unblock user"); } }
+  return <div className="flex max-w-2xl flex-col gap-5" aria-label="Privacy"><SettingsCard title="Privacy"><ToggleRow label="Read receipts" description="Let others know when you've read their messages." checked={settings?.privacy.read_receipts ?? true} onChange={(v) => void save({ privacy: { read_receipts: v } })} /><ToggleRow label="Typing indicators" description="Show others when you're typing in a conversation." checked={settings?.privacy.typing_indicators ?? true} onChange={(v) => void save({ privacy: { typing_indicators: v } })} /><div className="border-t px-4 py-3" style={{ borderColor: "var(--color-border-subtle)" }}><p className="text-sm font-medium text-[var(--color-fg-primary)]">Linked devices</p><p className="text-xs text-[var(--color-fg-muted)]">This app currently supports one browser session; linked-device management is not available.</p></div><div className="border-t px-4 py-3" style={{ borderColor: "var(--color-border-subtle)" }}><p className="text-sm font-medium text-[var(--color-fg-primary)]">Encryption</p><p className="text-xs text-[var(--color-fg-muted)]">Messages use the app's server transport and storage. End-to-end encryption is not currently implemented.</p></div></SettingsCard><SettingsCard title="Blocked users">{blocked.isLoading ? <p className="px-4 py-3 text-sm text-[var(--color-fg-muted)]">Loading…</p> : blocked.data?.length ? blocked.data.map((user) => <div key={user.id} className="flex items-center justify-between gap-3 border-b px-4 py-3 last:border-0" style={{ borderColor: "var(--color-border-subtle)" }}><span className="text-sm text-[var(--color-fg-primary)]">{user.display_name || user.username || user.phone || user.email || `User ${user.id}`}</span><button type="button" onClick={() => void unblock(user.id)} className="rounded-lg border px-3 py-1.5 text-sm" style={{ borderColor: "var(--color-border-subtle)" }}>Unblock</button></div>) : <p className="px-4 py-3 text-sm text-[var(--color-fg-muted)]">No blocked users.</p>}</SettingsCard></div>;
 }
 
 function NotificationsPanel() {
   const sound = useNotificationSound();
-  return (
-    <div className="flex max-w-[480px] flex-col gap-4" aria-label="Notifications">
-      <h2 className="text-base font-semibold text-[var(--color-fg-primary)]">
-        Notifications
-      </h2>
-      <ul className="flex flex-col gap-2">
-        <li
-          className="flex items-center justify-between gap-3 rounded-lg border px-4 py-3"
-          style={{ borderColor: "var(--color-border-subtle)" }}
-        >
-          <div>
-            <p className="text-sm font-medium text-[var(--color-fg-primary)]">
-              Sound on new messages
-            </p>
-            <p className="text-xs text-[var(--color-fg-muted)]">
-              {sound.supported
-                ? "Plays a short chime when a new message arrives in a conversation that's not currently open."
-                : "Sound asset not configured. Toggle is disabled."}
-            </p>
-          </div>
-          <label
-            className="relative inline-flex h-6 w-11 cursor-pointer items-center"
-            aria-label="Toggle sound on new messages"
-          >
-            <input
-              type="checkbox"
-              checked={sound.enabled === true}
-              disabled={!sound.supported || sound.enabled === null}
-              onChange={(e) => sound.setEnabled(e.target.checked)}
-              className="peer sr-only"
-            />
-            <span
-              className="h-6 w-11 rounded-full transition peer-disabled:opacity-50"
-              style={{
-                backgroundColor: sound.enabled
-                  ? "var(--color-accent)"
-                  : "var(--color-bg-tertiary)",
-              }}
-            />
-            <span
-              className="absolute left-0.5 h-5 w-5 rounded-full bg-white transition-transform"
-              style={{
-                transform: sound.enabled ? "translateX(20px)" : "translateX(0)",
-              }}
-            />
-          </label>
-        </li>
-        <li
-          className="flex items-center justify-between gap-3 rounded-lg border px-4 py-3"
-          style={{ borderColor: "var(--color-border-subtle)" }}
-        >
-          <div>
-            <p className="text-sm font-medium text-[var(--color-fg-primary)]">
-              Mute notifications
-            </p>
-            <p className="text-xs text-[var(--color-fg-muted)]">
-              Suppresses toast banners and (when supported) the chime.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => toast.info("Mute — coming soon")}
-            className="rounded px-3 py-1 text-xs text-[var(--color-accent)] hover:bg-[var(--color-bg-tertiary)]"
-          >
-            Open
-          </button>
-        </li>
-      </ul>
-    </div>
-  );
+  const { settings, save } = useSettings();
+  const [permission, setPermission] = useState<NotificationPermission | "unsupported">("default");
+  useEffect(() => { setPermission("Notification" in window ? Notification.permission : "unsupported"); }, []);
+  useEffect(() => {
+    if (settings && sound.enabled !== null && sound.enabled !== settings.notifications.sound_enabled) sound.setEnabled(settings.notifications.sound_enabled);
+  }, [settings?.notifications.sound_enabled, sound.enabled]);
+  async function enableDesktop() {
+    if (!("Notification" in window)) { toast.error("Desktop notifications are not supported by this browser"); return; }
+    const result = await Notification.requestPermission(); setPermission(result);
+    if (result === "granted") void save({ notifications: { desktop_enabled: true } });
+    else { void save({ notifications: { desktop_enabled: false } }); toast.info("Allow notifications in your browser settings to enable them"); }
+  }
+  return <div className="flex max-w-2xl flex-col gap-4" aria-label="Notifications"><SettingsCard title="Notifications"><ToggleRow label="Notifications" description="Enable or mute app notifications." checked={settings?.notifications.enabled ?? true} onChange={(v) => void save({ notifications: { enabled: v } })} /><ToggleRow label="Sound on new messages" description="Play a short chime for new messages outside the open chat." checked={sound.enabled === true} onChange={(v) => { sound.setEnabled(v); void save({ notifications: { sound_enabled: v } }); }} /><div className="flex items-center justify-between gap-3 border-t px-4 py-3" style={{ borderColor: "var(--color-border-subtle)" }}><span><span className="block text-sm font-medium text-[var(--color-fg-primary)]">Desktop notifications</span><span className="text-xs text-[var(--color-fg-muted)]">Browser permission: {permission}.</span></span><button type="button" onClick={() => void enableDesktop()} disabled={permission === "unsupported" || permission === "granted"} className="rounded-lg border px-3 py-2 text-sm disabled:opacity-50" style={{ borderColor: "var(--color-border-subtle)" }}>{permission === "granted" ? "Enabled" : "Enable"}</button></div></SettingsCard></div>;
 }
 
 function AppearancePanel() {
-  // Phase 8.3 — two-button theme switch. `useTheme` reads/writes
-  // localStorage and applies the data-theme attribute. The buttons
-  // live-update `document.documentElement.dataset.theme` via setTheme,
-  // so the entire UI flips instantly with no page reload.
   const { theme, setTheme } = useTheme();
-  const isDark = theme === "dark";
-  return (
-    <div className="flex max-w-[480px] flex-col gap-3" aria-label="Appearance">
-      <h2 className="text-base font-semibold text-[var(--color-fg-primary)]">
-        Appearance
-      </h2>
-      <div
-        className="rounded-lg border px-4 py-3"
-        style={{ borderColor: "var(--color-border-subtle)" }}
-      >
-        <p className="mb-2 text-sm font-medium text-[var(--color-fg-primary)]">
-          Theme
-        </p>
-        <div role="group" aria-label="Theme" className="flex gap-2">
-          {(["light", "dark"] as const).map((value) => {
-            const active = theme === value;
-            return (
-              <button
-                key={value}
-                type="button"
-                onClick={() => setTheme(value)}
-                aria-pressed={active}
-                className="flex-1 rounded-lg px-3 py-2 text-sm font-semibold transition disabled:cursor-not-allowed"
-                style={{
-                  backgroundColor: active
-                    ? "var(--color-accent)"
-                    : "var(--color-bg-tertiary)",
-                  color: active
-                    ? "var(--color-accent-fg)"
-                    : "var(--color-fg-primary)",
-                }}
-              >
-                {value === "light" ? "Light" : "Dark"}
-              </button>
-            );
-          })}
-        </div>
-        <p className="mt-2 text-xs text-[var(--color-fg-muted)]">
-          {isDark
-            ? "Dark mode is on. Tokens in app/tokens.css flip automatically."
-            : "Light mode is on. Switch to Dark in one click."}
-        </p>
-      </div>
-    </div>
-  );
+  const { save } = useSettings();
+  return <SettingsCard title="Appearance"><div className="flex items-center justify-between gap-4 px-4 py-3"><span><span className="block text-sm font-medium text-[var(--color-fg-primary)]">Theme</span><span className="text-xs text-[var(--color-fg-muted)]">Choose light or dark appearance.</span></span><div className="flex gap-2">{(["light", "dark"] as const).map((value) => <button key={value} type="button" onClick={() => { setTheme(value); void save({ appearance: { theme: value } }); }} aria-pressed={theme === value} className="rounded-lg px-3 py-2 text-sm font-semibold" style={{ backgroundColor: theme === value ? "var(--color-accent)" : "var(--color-bg-tertiary)", color: theme === value ? "var(--color-accent-fg)" : "var(--color-fg-primary)" }}>{value === "light" ? "Light" : "Dark"}</button>)}</div></div></SettingsCard>;
+}
+
+function DataUsagePanel() {
+  const client = useQueryClient();
+  const token = useAuthStore((s) => s.token);
+  const usage = useQuery({ queryKey: queryKeys.dataUsage, queryFn: getDataUsage, enabled: Boolean(token) });
+  function formatBytes(bytes: number) { if (bytes < 1024) return `${bytes} B`; if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`; return `${(bytes / 1024 ** 2).toFixed(1)} MB`; }
+  return <div className="flex max-w-2xl flex-col gap-3"><div className="flex items-center justify-between"><h2 className="text-base font-semibold text-[var(--color-fg-primary)]">Data usage</h2><button type="button" onClick={() => void client.invalidateQueries({ queryKey: queryKeys.dataUsage })} className="rounded-lg border px-3 py-2 text-sm" style={{ borderColor: "var(--color-border-subtle)" }}>Refresh</button></div><SettingsCard title="Account storage">{usage.isLoading ? <p className="px-4 py-3 text-sm">Loading…</p> : usage.isError ? <p className="px-4 py-3 text-sm text-red-500">Couldn't load usage data.</p> : <div className="grid grid-cols-2 gap-3 p-4">{([["Conversations", usage.data?.conversations], ["Messages", usage.data?.messages], ["Attachments", usage.data?.attachments], ["Attachment size", formatBytes(usage.data?.attachment_bytes ?? 0)], ["Stories", usage.data?.stories]] as const).map(([label, value]) => <div key={label} className="rounded-lg bg-[var(--color-bg-secondary)] p-3"><p className="text-xs text-[var(--color-fg-muted)]">{label}</p><p className="mt-1 text-lg font-semibold text-[var(--color-fg-primary)]">{value}</p></div>)}</div>}</SettingsCard><SettingsCard title="Local drafts"><div className="flex items-center justify-between gap-4 px-4 py-3"><span className="text-sm text-[var(--color-fg-secondary)]">Clear unsent message drafts stored in this browser. Server messages stay untouched.</span><button type="button" onClick={() => { useDraftStore.setState({ drafts: {} }); toast.success("Local drafts cleared"); }} className="shrink-0 rounded-lg border px-3 py-2 text-sm" style={{ borderColor: "var(--color-border-subtle)" }}>Clear drafts</button></div></SettingsCard></div>;
+}
+
+function BackupsPanel() {
+  const [busy, setBusy] = useState(false);
+  async function download() { setBusy(true); try { const data = await getBackup(); const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = url; anchor.download = `signal-clone-backup-${new Date().toISOString().slice(0, 10)}.json`; anchor.click(); URL.revokeObjectURL(url); toast.success("Backup downloaded"); } catch (error) { toast.error(error instanceof ApiError ? error.message : "Couldn't create backup"); } finally { setBusy(false); } }
+  return <SettingsCard title="Backups"><div className="p-4"><p className="text-sm text-[var(--color-fg-secondary)]">Download your account profile, conversations, and messages as a JSON file. Attachment URLs are included; media files are not embedded.</p><button type="button" onClick={() => void download()} disabled={busy} className="mt-4 min-h-10 rounded-lg px-4 text-sm font-semibold disabled:opacity-50" style={{ backgroundColor: "var(--color-accent)", color: "var(--color-accent-fg)" }}>{busy ? "Preparing…" : "Download backup"}</button></div></SettingsCard>;
+}
+
+function SupportPanel() {
+  return <SettingsCard title="Support Signal Clone"><p className="p-4 text-sm text-[var(--color-fg-secondary)]">Donation processing is not configured for this app, so payments cannot be accepted here.</p></SettingsCard>;
 }
 
 function Field({
@@ -795,3 +685,4 @@ function Field({
     </div>
   );
 }
+

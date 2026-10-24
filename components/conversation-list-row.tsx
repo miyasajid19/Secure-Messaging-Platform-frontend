@@ -21,6 +21,7 @@ import { toast } from "sonner";
 import { ConversationAvatar } from "./conversation-avatar";
 import {
   type Conversation,
+  type AppSettings,
   type MessagePreview,
   ApiError,
   blockUser,
@@ -203,8 +204,8 @@ export function ConversationListRow({
   }
 
   async function deleteChat() {
-    const confirmed = window.confirm("Delete this chat from your list? It will remain visible to other participants.");
-    if (!confirmed) return;
+    const confirmDelete = queryClient.getQueryData<AppSettings>(queryKeys.appSettings)?.chats.confirm_before_delete !== false;
+    if (confirmDelete && !window.confirm("Delete this chat from your list? It will remain visible to other participants.")) return;
     setActionPending(true);
     setMenuOpen(false);
     try {
