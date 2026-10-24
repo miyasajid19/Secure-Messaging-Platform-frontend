@@ -221,6 +221,7 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const optimistic: Message = {
       id: Number.NaN, // Mark this as a pending row; backend uses numeric ids only
+      client_id: tempId,
       conversation_id: conversationId,
       sender_id: currentUser.id,
       sender: currentUser,

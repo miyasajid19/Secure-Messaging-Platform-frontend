@@ -730,7 +730,7 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
         ) : (
           <ul className="flex min-w-0 flex-col gap-1 overflow-x-hidden py-4">
             {allMessages.map((m) => (
-              <li key={String(m.id)} data-message-id={m.id} className={`rounded-xl transition-colors duration-500 ${highlightedMessageId === m.id ? "bg-[var(--color-accent)]/10 ring-2 ring-[var(--color-accent)]/50" : ""}`}>
+              <li key={m.client_id ?? (Number.isSafeInteger(m.id) ? String(m.id) : `pending-${m.sender_id}-${m.created_at}`)} data-message-id={Number.isSafeInteger(m.id) ? String(m.id) : undefined} className={`rounded-xl transition-colors duration-500 ${highlightedMessageId === m.id ? "bg-[var(--color-accent)]/10 ring-2 ring-[var(--color-accent)]/50" : ""}`}>
                 {m.type === "system" ? (
                   <SystemMessage message={m} />
                 ) : (

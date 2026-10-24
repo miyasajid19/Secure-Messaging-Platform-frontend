@@ -134,16 +134,20 @@ export interface MessagePreview {
   created_at: string;
   type: MessageType;
   is_deleted?: boolean;
+  forwarded?: boolean;
 }
 
 export interface Message {
   id: number;
+  /** Local-only identifier for optimistic messages before the server assigns an id. */
+  client_id?: string;
   conversation_id: number;
   sender_id: number;
   content: string;
   type: MessageType;
   created_at: string;
   is_deleted?: boolean;
+  forwarded?: boolean;
   edited_at?: string | null;
   previous_content?: string | null;
   /** Timer copied from the conversation when this message was sent. */
@@ -584,6 +588,13 @@ export const editMessage = (messageId: number, content: string) =>
 /** Unsend one of the current user's messages for every participant. */
 export const deleteMessage = (messageId: number) =>
   apiFetch<Message>(`/messages/${messageId}`, { method: "DELETE" });
+
+/** Forward a message to one or more direct or group conversations. */
+export const forwardMessage = (messageId: number, conversationIds: number[]) =>
+  apiFetch<Message[]>(`/messages/${messageId}/forward`, {
+    method: "POST",
+    body: { conversation_ids: conversationIds },
+  });
 
 /** Upload files through the authenticated backend; ImageKit credentials stay server-side. */
 export async function uploadMessageAttachments(conversationId: number, files: File[]) {

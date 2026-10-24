@@ -30,6 +30,7 @@ import {
   CornerUpLeft,
   Download,
   FileText,
+  Forward,
   Loader2,
   Pencil,
   SmilePlus,
@@ -46,6 +47,7 @@ import { useReplyStore, type ReplyTarget } from "@/store/reply";
 import { getQueryClient, queryKeys } from "@/lib/api";
 import { addReaction, removeReaction, editMessage, deleteMessage, ApiError } from "@/lib/api";
 import { toast } from "sonner";
+import { ForwardMessageDialog } from "./forward-message-dialog";
 
 interface Props {
   message: Message;
@@ -94,6 +96,7 @@ export function MessageBubble({
   const [editValue, setEditValue] = useState(message.content);
   const [savingEdit, setSavingEdit] = useState(false);
   const [unsending, setUnsending] = useState(false);
+  const [forwardDialogOpen, setForwardDialogOpen] = useState(false);
   const [previousVersionOpen, setPreviousVersionOpen] = useState(false);
   const isImageGallery =
     attachments.length > 1 &&
@@ -422,6 +425,13 @@ export function MessageBubble({
             onClick={startEditing}
             className="flex h-11 w-11 items-center justify-center rounded-full text-[var(--color-fg-secondary)] transition-colors hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-fg-primary)] active:bg-[var(--color-bg-tertiary)] focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
           ><Pencil size={16} aria-hidden /></button> : null}
+          <button
+            type="button"
+            aria-label="Forward message"
+            title="Forward message"
+            onClick={() => setForwardDialogOpen(true)}
+            className="flex h-11 w-11 items-center justify-center rounded-full text-[var(--color-fg-secondary)] transition-colors hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-fg-primary)] active:bg-[var(--color-bg-tertiary)] focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
+          ><Forward size={16} aria-hidden /></button>
           {isOutgoing ? <button
             type="button"
             aria-label="Unsend message"
@@ -477,6 +487,7 @@ export function MessageBubble({
             ...(isImageOnly ? { boxShadow: "none", outline: "none" } : {}),
           }}
         >
+          {message.forwarded && !message.is_deleted ? <span className="mb-0.5 flex items-center gap-1 text-[11px] italic opacity-75"><Forward size={12} aria-hidden />Forwarded</span> : null}
           {message.is_deleted ? <span className="text-sm italic opacity-75">{isOutgoing ? "You deleted a message" : "This message was deleted"}</span> : editing ? <div className="flex min-w-[min(70vw,20rem)] flex-col gap-2" data-edit-message>
             <textarea
               autoFocus
@@ -605,6 +616,7 @@ export function MessageBubble({
           />
         ) : null}
       </div>
+      {forwardDialogOpen && !message.is_deleted ? <ForwardMessageDialog message={message} onClose={() => setForwardDialogOpen(false)} /> : null}
       {lightboxIndex !== null && imageAttachments[lightboxIndex] ? (
         <div
           role="dialog"

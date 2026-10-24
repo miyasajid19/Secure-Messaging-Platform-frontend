@@ -167,6 +167,7 @@ interface BackendMessageOut {
   type?: Message["type"];
   created_at?: string;
   is_deleted?: boolean;
+  forwarded?: boolean;
   edited_at?: string | null;
   previous_content?: string | null;
   parent_id?: number | null;
@@ -602,6 +603,7 @@ function normalizeIncoming(raw: BackendMessageOut): Message | null {
     type: raw.type ?? "text",
     created_at: raw.created_at ?? new Date().toISOString(),
     is_deleted: raw.is_deleted ?? false,
+    forwarded: raw.forwarded ?? false,
     edited_at: raw.edited_at ?? null,
     previous_content: raw.previous_content ?? null,
     disappear_after_seconds: raw.disappear_after_seconds ?? null,
