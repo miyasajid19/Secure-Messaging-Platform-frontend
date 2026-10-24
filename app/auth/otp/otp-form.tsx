@@ -32,10 +32,11 @@ export function OtpForm() {
     }
     setSubmitting(true);
     try {
-      const { token, user } = await verifyOtp({ phone: destination, session_info: sessionInfo, code: otp.trim() });
+      const { token, user, account_reactivated } = await verifyOtp({ phone: destination, session_info: sessionInfo, code: otp.trim() });
       sessionStorage.removeItem("phone-otp-session");
       sessionStorage.removeItem("phone-otp-number");
       setAuth(token, user);
+      if (account_reactivated) toast.success("Your account is active again. The pending change has been canceled.");
       router.push(user.display_name && user.username ? "/chat" : "/onboarding");
     } catch (error) {
       toast.error(error instanceof ApiError ? error.message : error instanceof Error ? error.message : "Couldn't verify the code");

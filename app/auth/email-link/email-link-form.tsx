@@ -24,9 +24,10 @@ export function EmailLinkForm() {
     setSubmitting(true);
     try {
       const firebaseIdToken = await completeFirebaseEmailLink(address, window.location.href);
-      const { token, user } = await verifyOtp({ email: address, firebase_id_token: firebaseIdToken });
+      const { token, user, account_reactivated } = await verifyOtp({ email: address, firebase_id_token: firebaseIdToken });
       localStorage.removeItem(EMAIL_KEY);
       setAuth(token, user);
+      if (account_reactivated) toast.success("Your account is active again. The pending change has been canceled.");
       router.replace(user.display_name && user.username ? "/chat" : "/onboarding");
     } catch (error) {
       toast.error(error instanceof ApiError ? error.message : error instanceof Error ? error.message : "Could not complete email sign-in");

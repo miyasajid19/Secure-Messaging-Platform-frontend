@@ -52,6 +52,9 @@ export interface DataUsage { conversations: number; messages: number; attachment
 export const getDataUsage = () => apiFetch<DataUsage>("/settings/data-usage", { method: "GET" });
 export const getBlockedUsers = () => apiFetch<User[]>("/settings/blocked-users", { method: "GET" });
 export const getBackup = () => apiFetch<Record<string, unknown>>("/settings/backup", { method: "GET" });
+export interface AccountLifecycle { status: "active" | "deactivated" | "deletion_pending"; delete_after: string | null }
+export const deactivateAccount = () => apiFetch<AccountLifecycle>("/auth/deactivate-account", { method: "POST" });
+export const scheduleAccountDeletion = () => apiFetch<AccountLifecycle>("/auth/delete-account", { method: "POST" });
 
 export interface Story {
   id: number;
@@ -389,6 +392,7 @@ export async function logout(): Promise<void> {
 export interface VerifyOtpResponse {
   token: string;
   user: User;
+  account_reactivated?: boolean;
 }
 
 export interface ProfilePatch {

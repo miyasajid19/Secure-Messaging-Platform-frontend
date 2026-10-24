@@ -3,10 +3,8 @@
 /**
  * Phase 7 — /settings page.
  *
- * Sections (left nav): Account / Privacy / Notifications / Appearance.
- * Account is real (PATCH /auth/profile); the rest are placeholders that
- * toast "Coming soon" — except Notifications, which has a working
- * sound toggle (mute by default, persisted in localStorage).
+ * Settings panels persist account preferences to PostgreSQL and connect
+ * account controls to the authenticated backend.
  *
  * Deep-linking: /settings?section=privacy etc. Selects the panel on
  * mount and syncs the URL on tab change so back/forward works.
@@ -23,7 +21,6 @@ import {
   Camera,
   ChartNoAxesCombined,
   HardDrive,
-  Heart,
   Lock,
   MessageCircle,
   Phone,
@@ -39,14 +36,13 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/store/auth";
 import { queryKeys } from "@/lib/api";
 import { useNotificationSound } from "@/lib/notification-sound";
-import { getAppSettings, getBackup, getBlockedUsers, getDataUsage, patchAppSettings, unblockUser, type AppSettings, type AppSettingsPatch, type DataUsage } from "@/lib/api";
+import { deactivateAccount, getAppSettings, getBackup, getBlockedUsers, getDataUsage, patchAppSettings, scheduleAccountDeletion, unblockUser, type AppSettings, type AppSettingsPatch } from "@/lib/api";
 import { useDraftStore } from "@/store/drafts";
 import { Avatar } from "@/components/avatar";
 import { PhoneNumberInput } from "@/components/auth/phone-number-input";
 
 type Section =
   | "account"
-  | "donate"
   | "general"
   | "appearance"
   | "chats"
@@ -64,29 +60,20 @@ const SECTIONS: Array<{
 }> = [
   { key: "account", label: "Account", icon: <UserIcon size={14} aria-hidden /> },
   {
-    key: "donate",
-    label: "Donate to Signal",
-    icon: <Heart size={14} aria-hidden />,
-    description: "Donation options will be available in a future update.",
-  },
-  {
     key: "general",
     label: "General",
     icon: <Settings2 size={14} aria-hidden />,
-    description: "General app preferences are coming soon.",
   },
   { key: "appearance", label: "Appearance", icon: <Sun size={14} aria-hidden /> },
   {
     key: "chats",
     label: "Chats",
     icon: <MessageCircle size={14} aria-hidden />,
-    description: "Chat preferences and message options are coming soon.",
   },
   {
     key: "calls",
     label: "Calls",
     icon: <Phone size={14} aria-hidden />,
-    description: "Voice and video call settings are coming soon.",
   },
   {
     key: "notifications",
@@ -98,20 +85,17 @@ const SECTIONS: Array<{
     key: "data-usage",
     label: "Data usage",
     icon: <ChartNoAxesCombined size={14} aria-hidden />,
-    description: "Data and storage controls are coming soon.",
   },
   {
     key: "backups",
     label: "Backups",
     icon: <HardDrive size={14} aria-hidden />,
-    description: "Message backup options are coming soon.",
   },
 ];
 
 function isSection(v: string | null): v is Section {
   return (
     v === "account" ||
-    v === "donate" ||
     v === "general" ||
     v === "chats" ||
     v === "calls" ||
@@ -377,7 +361,6 @@ function SettingsPageInner() {
           {section === "calls" ? <CallsPanel /> : null}
           {section === "data-usage" ? <DataUsagePanel /> : null}
           {section === "backups" ? <BackupsPanel /> : null}
-          {section === "donate" ? <SupportPanel /> : null}
         </section>
       </div>
     </main>
@@ -385,6 +368,7 @@ function SettingsPageInner() {
 }
 
 function AccountPanel() {
+  const router = useRouter();
   const storedUser = useAuthStore((s) => s.user);
   // Re-fetch to ensure the form has the freshest display_name.
   const meQuery = useQuery({
@@ -405,6 +389,7 @@ function AccountPanel() {
   const [phoneOtpRequested, setPhoneOtpRequested] = useState(false);
   const [phoneOtpSession, setPhoneOtpSession] = useState("");
   const [phoneBusy, setPhoneBusy] = useState(false);
+  const [lifecycleBusy, setLifecycleBusy] = useState(false);
 
   useEffect(() => {
     setDraft(me?.display_name ?? "");
@@ -508,6 +493,33 @@ function AccountPanel() {
     setProfilePhoto(file);
   }
 
+  async function deactivate() {
+    if (!window.confirm("Deactivate this account? You will be signed out. People can still send you messages, which will be waiting when you sign in again.")) return;
+    setLifecycleBusy(true);
+    try {
+      await deactivateAccount();
+      useAuthStore.getState().clear();
+      queryClient.clear();
+      toast.success("Account deactivated. Sign in again whenever you want to reactivate it.");
+      router.replace("/auth/phone");
+    } catch (error) { toast.error(error instanceof ApiError ? error.message : "Couldn't deactivate account"); }
+    finally { setLifecycleBusy(false); }
+  }
+
+  async function scheduleDeletion() {
+    if (!window.confirm("Schedule account deletion? Your profile will be hidden and people cannot message you. Your username stays reserved. Sign in within 30 days to undo deletion; after that the account and username are permanently removed.")) return;
+    setLifecycleBusy(true);
+    try {
+      const result = await scheduleAccountDeletion();
+      useAuthStore.getState().clear();
+      queryClient.clear();
+      const deadline = result.delete_after ? new Date(result.delete_after).toLocaleDateString() : "in 30 days";
+      toast.success(`Deletion scheduled for ${deadline}. Sign in within 30 days to undo it.`);
+      router.replace("/auth/phone");
+    } catch (error) { toast.error(error instanceof ApiError ? error.message : "Couldn't schedule account deletion"); }
+    finally { setLifecycleBusy(false); }
+  }
+
   return (
     <div className="flex max-w-2xl flex-col gap-6" aria-label="Account">
       <form id="settings-profile-form" onSubmit={onSubmit} className="flex flex-col gap-4" aria-label="Profile details">
@@ -580,6 +592,18 @@ function AccountPanel() {
           {saving ? "Saving…" : "Save changes"}
         </button>
       </div>
+      <section className="flex max-w-2xl flex-col gap-3 border-t pt-5" style={{ borderColor: "var(--color-border-subtle)" }} aria-label="Account lifecycle">
+        <div>
+          <h3 className="text-sm font-semibold text-[var(--color-fg-primary)]">Account access</h3>
+          <p className="mt-1 text-xs text-[var(--color-fg-muted)]">Deactivation signs you out while leaving your account available to receive messages. Sign in again to reactivate.</p>
+        </div>
+        <button type="button" disabled={lifecycleBusy} onClick={() => void deactivate()} className="min-h-11 self-start rounded-lg border px-4 text-sm font-medium disabled:opacity-50" style={{ borderColor: "var(--color-border-subtle)", color: "var(--color-fg-primary)" }}>{lifecycleBusy ? "Please wait…" : "Deactivate account"}</button>
+        <div className="mt-2 border-t pt-4" style={{ borderColor: "var(--color-border-subtle)" }}>
+          <h3 className="text-sm font-semibold text-red-600">Delete account</h3>
+          <p className="mt-1 text-xs text-[var(--color-fg-muted)]">Your account becomes hidden and stops accepting messages immediately. Permanent removal happens after 30 days. Your username remains reserved until permanent deletion. Sign in during the grace period to cancel.</p>
+          <button type="button" disabled={lifecycleBusy} onClick={() => void scheduleDeletion()} className="mt-3 min-h-11 rounded-lg bg-red-600 px-4 text-sm font-semibold text-white disabled:opacity-50">Schedule account deletion</button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -625,7 +649,7 @@ function PrivacyPanel() {
   const token = useAuthStore((s) => s.token);
   const blocked = useQuery({ queryKey: queryKeys.blockedUsers, queryFn: getBlockedUsers, enabled: Boolean(token) });
   async function unblock(id: number) { try { await unblockUser(id); await client.invalidateQueries({ queryKey: queryKeys.blockedUsers }); toast.success("User unblocked"); } catch (error) { toast.error(error instanceof ApiError ? error.message : "Couldn't unblock user"); } }
-  return <div className="flex max-w-2xl flex-col gap-5" aria-label="Privacy"><SettingsCard title="Privacy"><ToggleRow label="Read receipts" description="Let others know when you've read their messages." checked={settings?.privacy.read_receipts ?? true} onChange={(v) => void save({ privacy: { read_receipts: v } })} /><ToggleRow label="Typing indicators" description="Show others when you're typing in a conversation." checked={settings?.privacy.typing_indicators ?? true} onChange={(v) => void save({ privacy: { typing_indicators: v } })} /><div className="border-t px-4 py-3" style={{ borderColor: "var(--color-border-subtle)" }}><p className="text-sm font-medium text-[var(--color-fg-primary)]">Linked devices</p><p className="text-xs text-[var(--color-fg-muted)]">This app currently supports one browser session; linked-device management is not available.</p></div><div className="border-t px-4 py-3" style={{ borderColor: "var(--color-border-subtle)" }}><p className="text-sm font-medium text-[var(--color-fg-primary)]">Encryption</p><p className="text-xs text-[var(--color-fg-muted)]">Messages use the app's server transport and storage. End-to-end encryption is not currently implemented.</p></div></SettingsCard><SettingsCard title="Blocked users">{blocked.isLoading ? <p className="px-4 py-3 text-sm text-[var(--color-fg-muted)]">Loading…</p> : blocked.data?.length ? blocked.data.map((user) => <div key={user.id} className="flex items-center justify-between gap-3 border-b px-4 py-3 last:border-0" style={{ borderColor: "var(--color-border-subtle)" }}><span className="text-sm text-[var(--color-fg-primary)]">{user.display_name || user.username || user.phone || user.email || `User ${user.id}`}</span><button type="button" onClick={() => void unblock(user.id)} className="rounded-lg border px-3 py-1.5 text-sm" style={{ borderColor: "var(--color-border-subtle)" }}>Unblock</button></div>) : <p className="px-4 py-3 text-sm text-[var(--color-fg-muted)]">No blocked users.</p>}</SettingsCard></div>;
+  return <div className="flex max-w-2xl flex-col gap-5" aria-label="Privacy"><SettingsCard title="Privacy"><ToggleRow label="Read receipts" description="Let others know when you've read their messages." checked={settings?.privacy.read_receipts ?? true} onChange={(v) => void save({ privacy: { read_receipts: v } })} /><ToggleRow label="Typing indicators" description="Show others when you're typing in a conversation." checked={settings?.privacy.typing_indicators ?? true} onChange={(v) => void save({ privacy: { typing_indicators: v } })} /></SettingsCard><SettingsCard title="Blocked users">{blocked.isLoading ? <p className="px-4 py-3 text-sm text-[var(--color-fg-muted)]">Loading…</p> : blocked.data?.length ? blocked.data.map((user) => <div key={user.id} className="flex items-center justify-between gap-3 border-b px-4 py-3 last:border-0" style={{ borderColor: "var(--color-border-subtle)" }}><span className="text-sm text-[var(--color-fg-primary)]">{user.display_name || user.username || user.phone || user.email || `User ${user.id}`}</span><button type="button" onClick={() => void unblock(user.id)} className="rounded-lg border px-3 py-1.5 text-sm" style={{ borderColor: "var(--color-border-subtle)" }}>Unblock</button></div>) : <p className="px-4 py-3 text-sm text-[var(--color-fg-muted)]">No blocked users.</p>}</SettingsCard></div>;
 }
 
 function NotificationsPanel() {
@@ -663,10 +687,6 @@ function BackupsPanel() {
   const [busy, setBusy] = useState(false);
   async function download() { setBusy(true); try { const data = await getBackup(); const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = url; anchor.download = `signal-clone-backup-${new Date().toISOString().slice(0, 10)}.json`; anchor.click(); URL.revokeObjectURL(url); toast.success("Backup downloaded"); } catch (error) { toast.error(error instanceof ApiError ? error.message : "Couldn't create backup"); } finally { setBusy(false); } }
   return <SettingsCard title="Backups"><div className="p-4"><p className="text-sm text-[var(--color-fg-secondary)]">Download your account profile, conversations, and messages as a JSON file. Attachment URLs are included; media files are not embedded.</p><button type="button" onClick={() => void download()} disabled={busy} className="mt-4 min-h-10 rounded-lg px-4 text-sm font-semibold disabled:opacity-50" style={{ backgroundColor: "var(--color-accent)", color: "var(--color-accent-fg)" }}>{busy ? "Preparing…" : "Download backup"}</button></div></SettingsCard>;
-}
-
-function SupportPanel() {
-  return <SettingsCard title="Support Signal Clone"><p className="p-4 text-sm text-[var(--color-fg-secondary)]">Donation processing is not configured for this app, so payments cannot be accepted here.</p></SettingsCard>;
 }
 
 function Field({
