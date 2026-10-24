@@ -62,7 +62,7 @@ import { SHORTCUT_SEARCH_EVENT } from "@/app/providers";
 import { useTheme } from "@/lib/theme";
 
 const DEBOUNCE_MS = 150;
-type ConversationFilter = "all" | "unread" | "groups" | "direct";
+type ConversationFilter = "all" | "unread" | "groups" | "direct" | "archived";
 
 export function ConversationListPane({
   navigationHidden = false,
@@ -75,10 +75,11 @@ export function ConversationListPane({
   const selectedId = useUiStore((s) => s.selectedConversationId);
   const { theme, toggle: toggleTheme } = useTheme();
   const queryClient = useQueryClient();
+  const [conversationFilter, setConversationFilter] = useState<ConversationFilter>("all");
 
   const conversationsQuery = useQuery({
-    queryKey: queryKeys.conversations,
-    queryFn: listConversations,
+    queryKey: conversationFilter === "archived" ? [...queryKeys.conversations, "archived"] : queryKeys.conversations,
+    queryFn: () => listConversations(conversationFilter === "archived"),
     staleTime: 10_000,
   });
 
@@ -96,8 +97,6 @@ export function ConversationListPane({
   // Debounce the search input.
   const [searchInput, setSearchInput] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [conversationFilter, setConversationFilter] =
-    useState<ConversationFilter>("all");
   const [filterOpen, setFilterOpen] = useState(false);
   const [showNewChat, setShowNewChat] = useState(false);
   const [newChatInput, setNewChatInput] = useState("");
@@ -162,11 +161,11 @@ export function ConversationListPane({
     return conversations.filter((conversation) => {
       const matchesSearch =
         !debouncedSearch || matches(conversation, debouncedSearch);
-      const matchesFilter =
-        conversationFilter === "all" ||
-        (conversationFilter === "unread" && conversation.unread_count > 0) ||
-        (conversationFilter === "groups" && conversation.type === "group") ||
-        (conversationFilter === "direct" && conversation.type === "direct");
+      const matchesFilter = conversationFilter === "all"
+        || (conversationFilter === "unread" && conversation.unread_count > 0)
+        || (conversationFilter === "groups" && conversation.type === "group")
+        || (conversationFilter === "direct" && conversation.type === "direct")
+        || (conversationFilter === "archived" && conversation.archived === true);
       return matchesSearch && matchesFilter;
     });
   }, [conversations, conversationFilter, debouncedSearch]);
@@ -330,6 +329,7 @@ export function ConversationListPane({
                   ["unread", "Unread"],
                   ["groups", "Groups"],
                   ["direct", "Direct chats"],
+                  ["archived", "Archived"],
                 ] as const
               ).map(([value, label]) => (
                 <button

@@ -58,6 +58,12 @@ import {
   sendMessage,
   type Conversation,
   type Message,
+  blockUser,
+  deleteConversationForMe,
+  hideMessageForMe,
+  listConversationMedia,
+  updateConversationActions,
+  unblockUser,
 } from "@/lib/api";
 import { getQueryClient } from "@/lib/api";
 import { useUiStore } from "@/store/ui";
@@ -134,7 +140,7 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
   // populated. No refetch needed — TanStack Query dedups.
   const conversationsQuery = useQuery({
     queryKey: queryKeys.conversations,
-    queryFn: listConversations,
+    queryFn: () => listConversations(),
     staleTime: 10_000,
   });
   const conversation = useMemo(
@@ -166,6 +172,14 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
   const [viewingSearchResult, setViewingSearchResult] = useState(false);
   const [jumpMessageId, setJumpMessageId] = useState<number | null>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<number | null>(null);
+  const [selectedMessageIds, setSelectedMessageIds] = useState<Set<number>>(() => new Set());
+  const [mediaOpen, setMediaOpen] = useState(false);
+  const mediaQuery = useQuery({
+    queryKey: ["conversation-media", conversationId],
+    queryFn: () => listConversationMedia(conversationId as number),
+    enabled: mediaOpen && conversationId != null,
+    staleTime: 30_000,
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -190,6 +204,9 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
     setSearchOpen(false);
     setSearchQuery("");
     setViewingSearchResult(false);
+    setSelectedMessageIds(new Set());
+    setMediaOpen(false);
+    setSelectionMode(false);
   }, [conversationId]);
 
   // Read-on-open must wait for the messages query: on a hard refresh the
@@ -356,6 +373,7 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
   // open it; the modal itself ignores the conversation type at render.
   const [groupInfoOpen, setGroupInfoOpen] = useState(false);
   const [chatMenuOpen, setChatMenuOpen] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
 
   // Smart-scroll state (Phase 7 UX follow-up). We track the *id* of
   // the last message so the smart-scroll effect can fire only when a
@@ -611,6 +629,69 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
     }
   }
 
+  async function saveConversationAction(actions: { muted?: boolean; pinned?: boolean; archived?: boolean; marked_unread?: boolean }) {
+    setChatMenuOpen(false);
+    try {
+      await updateConversationActions(cid, actions);
+      await getQueryClient().invalidateQueries({ queryKey: queryKeys.conversations });
+      if (actions.archived !== undefined || actions.marked_unread) setSelectedConversation(null);
+      if (actions.muted !== undefined) toast.success(actions.muted ? "Chat muted" : "Chat unmuted");
+      if (actions.pinned !== undefined) toast.success(actions.pinned ? "Chat pinned" : "Chat unpinned");
+      if (actions.archived !== undefined) toast.success(actions.archived ? "Chat archived" : "Chat unarchived");
+      if (actions.marked_unread) toast.success("Marked as unread");
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : "Couldn't update chat");
+    }
+  }
+
+  async function handleDeleteChat() {
+    setChatMenuOpen(false);
+    if (!window.confirm("Delete this chat from your conversation list? Messages remain visible to other participants.")) return;
+    try {
+      await deleteConversationForMe(cid);
+      setSelectedConversation(null);
+      await getQueryClient().invalidateQueries({ queryKey: queryKeys.conversations });
+      toast.success("Chat deleted for you");
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : "Couldn't delete chat");
+    }
+  }
+
+  async function handleBlock() {
+    if (!otherParticipant) return;
+    setChatMenuOpen(false);
+    const name = otherParticipant.display_name ?? otherParticipant.username ?? otherParticipant.phone ?? "this person";
+    try {
+      if (conv.blocked_by_me) {
+        if (!window.confirm(`Unblock ${name}?`)) return;
+        await unblockUser(otherParticipant.id);
+        toast.success(`${name} unblocked`);
+      } else {
+        if (!window.confirm(`Block ${name}? Neither of you will be able to send messages in this chat.`)) return;
+        await blockUser(otherParticipant.id);
+        setSelectedConversation(null);
+        toast.success(`${name} blocked`);
+      }
+      await getQueryClient().invalidateQueries({ queryKey: queryKeys.conversations });
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : "Couldn't block this person");
+    }
+  }
+
+  async function deleteSelectedForMe() {
+    const ids = [...selectedMessageIds];
+    if (!ids.length) return;
+    try {
+      await Promise.all(ids.map((id) => hideMessageForMe(id)));
+      getQueryClient().setQueryData<Message[]>(queryKeys.messages(cid), (previous) => previous?.filter((message) => !selectedMessageIds.has(message.id)));
+      setSelectedMessageIds(new Set());
+      toast.success(`${ids.length} message${ids.length === 1 ? "" : "s"} deleted for you`);
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : "Couldn't delete selected messages");
+      void getQueryClient().invalidateQueries({ queryKey: queryKeys.messages(cid) });
+    }
+  }
+
   return (
     <section
       className="flex h-full min-w-0 flex-1 flex-col overflow-hidden"
@@ -630,6 +711,18 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
         onMenuClose={() => setChatMenuOpen(false)}
         onGroupSettings={() => { setChatMenuOpen(false); setGroupInfoOpen(true); }}
         onLeaveGroup={handleLeaveGroup}
+        muted={!!conv.muted}
+        pinned={!!conv.pinned}
+        archived={!!conv.archived}
+        blockedByMe={!!conv.blocked_by_me}
+        onToggleMute={() => void saveConversationAction({ muted: !conv.muted })}
+        onOpenMedia={() => { setChatMenuOpen(false); setMediaOpen(true); }}
+        onSelectMessages={() => { setChatMenuOpen(false); setSelectedMessageIds(new Set()); setSelectionMode((value) => !value); }}
+        onMarkUnread={() => void saveConversationAction({ marked_unread: true })}
+        onTogglePin={() => void saveConversationAction({ pinned: !conv.pinned })}
+        onToggleArchive={() => void saveConversationAction({ archived: !conv.archived })}
+        onBlock={() => void handleBlock()}
+        onDeleteChat={() => void handleDeleteChat()}
         canVoiceCall={conv.type === "direct" && !!otherParticipant}
         canGroupCall={conv.type === "group" && conv.participants.length > 1}
         onGroupAudioCall={() => void startGroupCall(cid, conv.name ?? "Group call", conv.avatar_url ?? null, conv.participants.map((participant) => ({ id: participant.id, displayName: participant.display_name ?? participant.username ?? participant.phone ?? "Signal user", avatarUrl: participant.avatar_url })), "audio")}
@@ -674,6 +767,12 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
           </button></li>)}
         </ul> : null}
       </section> : null}
+
+      {selectionMode ? <div className="flex items-center gap-2 border-b px-3 py-2" style={{ borderColor: "var(--color-border-subtle)" }}>
+        <span className="flex-1 text-sm font-medium text-[var(--color-fg-primary)]">{selectedMessageIds.size} selected</span>
+        <button type="button" disabled={!selectedMessageIds.size} onClick={() => void deleteSelectedForMe()} className="rounded-lg px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-500/10 disabled:opacity-40">Delete for me</button>
+        <button type="button" onClick={() => { setSelectionMode(false); setSelectedMessageIds(new Set()); }} className="rounded-lg px-3 py-2 text-sm text-[var(--color-fg-secondary)] hover:bg-[var(--color-bg-tertiary)]">Cancel</button>
+      </div> : null}
 
       <div
         ref={scrollRef}
@@ -730,7 +829,8 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
         ) : (
           <ul className="flex min-w-0 flex-col gap-1 overflow-x-hidden py-4">
             {allMessages.map((m) => (
-              <li key={m.client_id ?? (Number.isSafeInteger(m.id) ? String(m.id) : `pending-${m.sender_id}-${m.created_at}`)} data-message-id={Number.isSafeInteger(m.id) ? String(m.id) : undefined} className={`rounded-xl transition-colors duration-500 ${highlightedMessageId === m.id ? "bg-[var(--color-accent)]/10 ring-2 ring-[var(--color-accent)]/50" : ""}`}>
+              <li key={m.client_id ?? (Number.isSafeInteger(m.id) ? String(m.id) : `pending-${m.sender_id}-${m.created_at}`)} data-message-id={Number.isSafeInteger(m.id) ? String(m.id) : undefined} className={`flex items-center rounded-xl transition-colors duration-500 ${highlightedMessageId === m.id ? "bg-[var(--color-accent)]/10 ring-2 ring-[var(--color-accent)]/50" : ""}`}>
+                {selectionMode && m.type !== "system" && Number.isSafeInteger(m.id) ? <input type="checkbox" aria-label={`Select message from ${m.sender.display_name ?? "user"}`} checked={selectedMessageIds.has(m.id)} onChange={() => setSelectedMessageIds((current) => { const next = new Set(current); if (next.has(m.id)) next.delete(m.id); else next.add(m.id); return next; })} className="ml-3 h-4 w-4 shrink-0 accent-[var(--color-accent)]" /> : null}
                 {m.type === "system" ? (
                   <SystemMessage message={m} />
                 ) : (
@@ -766,11 +866,13 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
         )}
       </div>
 
-      <Composer
+      {conv.type === "direct" && (conv.blocked_by_me || conv.blocked_me) ? <div className="border-t px-4 py-4 text-center text-sm text-[var(--color-fg-muted)]" style={{ borderColor: "var(--color-border-subtle)" }}>
+        {conv.blocked_by_me ? "You blocked this person. Messages are disabled." : "You can’t send messages in this chat."}
+      </div> : <Composer
         conversationId={cid}
         currentUser={meQuery.data ?? null}
         onSend={handleSend}
-      />
+      />}
 
       <GroupInfoModal
         open={groupInfoOpen}
@@ -778,6 +880,25 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
         conversation={conv}
         currentUserId={myUserId}
       />
+      {mediaOpen ? <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMediaOpen(false); }}>
+        <section role="dialog" aria-modal="true" aria-labelledby="conversation-media-title" className="flex max-h-[min(80vh,720px)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border bg-[var(--color-bg-primary)] shadow-2xl" style={{ borderColor: "var(--color-border-subtle)" }}>
+          <header className="flex items-center gap-3 border-b px-5 py-4" style={{ borderColor: "var(--color-border-subtle)" }}>
+            <Images size={19} className="text-[var(--color-accent)]" aria-hidden />
+            <h2 id="conversation-media-title" className="flex-1 text-lg font-semibold text-[var(--color-fg-primary)]">All media</h2>
+            <button type="button" onClick={() => setMediaOpen(false)} aria-label="Close media" className="rounded-full p-2 text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-tertiary)]"><X size={18} /></button>
+          </header>
+          <div className="min-h-40 flex-1 overflow-y-auto p-4">
+            {mediaQuery.isLoading ? <p className="py-10 text-center text-sm text-[var(--color-fg-muted)]">Loading media…</p> : mediaQuery.error ? <div className="py-10 text-center"><p className="text-sm text-[var(--color-status-error)]">Couldn’t load chat media.</p><button type="button" onClick={() => void mediaQuery.refetch()} className="mt-2 text-sm text-[var(--color-accent)]">Try again</button></div> : mediaQuery.data?.length ? <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+              {mediaQuery.data.map((item) => <li key={item.id} className="min-w-0 overflow-hidden rounded-xl border" style={{ borderColor: "var(--color-border-subtle)" }}>
+                <a href={item.url} target="_blank" rel="noreferrer" className="block">
+                  {item.mime.startsWith("image/") ? <img src={item.url} alt="Chat attachment" loading="lazy" className="aspect-square w-full object-cover" /> : item.mime.startsWith("video/") ? <video src={item.url} preload="metadata" className="aspect-square w-full object-cover" /> : <div className="flex aspect-square items-center justify-center bg-[var(--color-bg-secondary)] text-sm text-[var(--color-fg-secondary)]">File</div>}
+                  <time dateTime={item.created_at} className="block truncate px-2 py-1.5 text-xs text-[var(--color-fg-muted)]">{new Date(item.created_at).toLocaleDateString()}</time>
+                </a>
+              </li>)}
+            </ul> : <p className="py-10 text-center text-sm text-[var(--color-fg-muted)]">No media or attachments in this chat yet.</p>}
+          </div>
+        </section>
+      </div> : null}
     </section>
   );
 }
@@ -849,6 +970,18 @@ interface ChatHeaderProps {
   onMenuClose: () => void;
   onGroupSettings: () => void;
   onLeaveGroup: () => void;
+  muted: boolean;
+  pinned: boolean;
+  archived: boolean;
+  blockedByMe: boolean;
+  onToggleMute: () => void;
+  onOpenMedia: () => void;
+  onSelectMessages: () => void;
+  onMarkUnread: () => void;
+  onTogglePin: () => void;
+  onToggleArchive: () => void;
+  onBlock: () => void;
+  onDeleteChat: () => void;
   canVoiceCall: boolean;
   canGroupCall: boolean;
   onGroupAudioCall: () => void;
@@ -875,6 +1008,18 @@ function ChatHeader({
   onMenuClose,
   onGroupSettings,
   onLeaveGroup,
+  muted,
+  pinned,
+  archived,
+  blockedByMe,
+  onToggleMute,
+  onOpenMedia,
+  onSelectMessages,
+  onMarkUnread,
+  onTogglePin,
+  onToggleArchive,
+  onBlock,
+  onDeleteChat,
   canVoiceCall,
   canGroupCall,
   onGroupAudioCall,
@@ -964,13 +1109,17 @@ function ChatHeader({
         >
           <MoreHorizontal size={19} />
         </IconBtn>
-        {menuOpen ? <ChatOptionsMenu isGroup={isGroup} onClose={onMenuClose} onGroupSettings={onGroupSettings} onLeaveGroup={onLeaveGroup} /> : null}
+        {menuOpen ? <ChatOptionsMenu isGroup={isGroup} muted={muted} pinned={pinned} archived={archived} blockedByMe={blockedByMe} onClose={onMenuClose} onGroupSettings={onGroupSettings} onLeaveGroup={onLeaveGroup} onToggleMute={onToggleMute} onOpenMedia={onOpenMedia} onSelectMessages={onSelectMessages} onMarkUnread={onMarkUnread} onTogglePin={onTogglePin} onToggleArchive={onToggleArchive} onBlock={onBlock} onDeleteChat={onDeleteChat} /> : null}
       </div>
     </header>
   );
 }
 
-function ChatOptionsMenu({ isGroup, onClose, onGroupSettings, onLeaveGroup }: { isGroup: boolean; onClose: () => void; onGroupSettings: () => void; onLeaveGroup: () => void }) {
+function ChatOptionsMenu({ isGroup, muted, pinned, archived, blockedByMe, onClose, onGroupSettings, onLeaveGroup, onToggleMute, onOpenMedia, onSelectMessages, onMarkUnread, onTogglePin, onToggleArchive, onBlock, onDeleteChat }: {
+  isGroup: boolean; muted: boolean; pinned: boolean; archived: boolean; blockedByMe: boolean; onClose: () => void; onGroupSettings: () => void; onLeaveGroup: () => void;
+  onToggleMute: () => void; onOpenMedia: () => void; onSelectMessages: () => void; onMarkUnread: () => void;
+  onTogglePin: () => void; onToggleArchive: () => void; onBlock: () => void; onDeleteChat: () => void;
+}) {
   const menuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -988,22 +1137,17 @@ function ChatOptionsMenu({ isGroup, onClose, onGroupSettings, onLeaveGroup }: { 
     };
   }, [onClose]);
 
-  const comingSoon = (label: string) => {
-    onClose();
-    toast.info(`${label} — coming soon`);
-  };
-
   const items = [
     { label: "Disappearing messages", icon: <Clock3 size={15} />, action: onGroupSettings, arrow: true },
-    { label: "Mute notifications", icon: <BellOff size={15} />, action: () => comingSoon("Mute notifications"), arrow: true },
+    { label: muted ? "Unmute notifications" : "Mute notifications", icon: <BellOff size={15} />, action: onToggleMute },
     ...(isGroup ? [{ label: "Group settings", icon: <Settings size={15} />, action: onGroupSettings, arrow: false }] : []),
-    { label: "All media", icon: <Images size={15} />, action: () => comingSoon("All media"), arrow: false },
-    { label: "Select messages", icon: <CheckCircle2 size={15} />, action: () => comingSoon("Select messages"), dividerBefore: true },
-    { label: "Mark as unread", icon: <MessageSquare size={15} />, action: () => comingSoon("Mark as unread"), dividerBefore: true },
-    { label: "Pin chat", icon: <Pin size={15} />, action: () => comingSoon("Pin chat") },
-    { label: "Archive", icon: <Archive size={15} />, action: () => comingSoon("Archive") },
-    { label: "Block", icon: <Ban size={15} />, action: () => comingSoon("Block") },
-    { label: "Delete", icon: <Trash2 size={15} />, action: () => comingSoon("Delete") },
+    { label: "All media", icon: <Images size={15} />, action: onOpenMedia },
+    { label: "Select messages", icon: <CheckCircle2 size={15} />, action: onSelectMessages, dividerBefore: true },
+    { label: "Mark as unread", icon: <MessageSquare size={15} />, action: onMarkUnread, dividerBefore: true },
+    { label: pinned ? "Unpin chat" : "Pin chat", icon: <Pin size={15} />, action: onTogglePin },
+    { label: archived ? "Unarchive" : "Archive", icon: <Archive size={15} />, action: onToggleArchive },
+    ...(!isGroup ? [{ label: blockedByMe ? "Unblock" : "Block", icon: <Ban size={15} />, action: onBlock }] : []),
+    { label: "Delete chat", icon: <Trash2 size={15} />, action: onDeleteChat },
     ...(isGroup ? [{ label: "Leave group", icon: <LogOut size={15} />, action: onLeaveGroup }] : []),
   ];
 

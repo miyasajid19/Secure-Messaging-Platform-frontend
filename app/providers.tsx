@@ -25,6 +25,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "sonner";
 import { useAuthStore } from "@/store/auth";
 import { getOnlineUsers, setQueryClient } from "@/lib/api";
+import { queryKeys, type Conversation } from "@/lib/api";
 import { useRealtimeStore } from "@/store/realtime";
 import { useUiStore } from "@/store/ui";
 import { connect, disconnect, subscribeToIncomingMessages } from "@/lib/realtime";
@@ -126,6 +127,9 @@ export function Providers({ children }: { children: ReactNode }) {
       if (myUserId == null || message.sender_id === myUserId) return;
       const activeId = useUiStore.getState().selectedConversationId;
       if (activeId === message.conversation_id) return;
+      const muted = queryClient.getQueriesData<Conversation[]>({ queryKey: queryKeys.conversations })
+        .some(([, conversations]) => conversations?.some((conversation) => conversation.id === message.conversation_id && conversation.muted));
+      if (muted) return;
       playChimeRef.current();
     });
   }, []);

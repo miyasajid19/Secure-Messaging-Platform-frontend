@@ -28,7 +28,7 @@ export function ForwardMessageDialog({ message, onClose }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const conversationsQuery = useQuery({
     queryKey: queryKeys.conversations,
-    queryFn: listConversations,
+    queryFn: () => listConversations(),
     staleTime: 30_000,
     retry: false,
   });

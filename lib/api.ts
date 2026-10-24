@@ -209,6 +209,12 @@ export interface Conversation {
    *  than `now - created_at - disappear_after_seconds` are deleted
    *  and a `message.delete` WS event is broadcast. */
   disappear_after_seconds: number | null;
+  muted?: boolean;
+  pinned?: boolean;
+  archived?: boolean;
+  marked_unread?: boolean;
+  blocked_by_me?: boolean;
+  blocked_me?: boolean;
 }
 
 export interface Contact {
@@ -376,8 +382,27 @@ export interface ProfilePatch {
 }
 
 /** `GET /conversations`. Sorted by `last_message_at DESC NULLS LAST`. */
-export const listConversations = () =>
-  apiFetch<Conversation[]>("/conversations", { method: "GET" });
+export const listConversations = (archived = false) =>
+  apiFetch<Conversation[]>(`/conversations${archived ? "?archived=true" : ""}`, { method: "GET" });
+
+export const updateConversationActions = (conversationId: number, actions: {
+  muted?: boolean; pinned?: boolean; archived?: boolean; marked_unread?: boolean;
+}) => apiFetch<Conversation>(`/conversations/${conversationId}/actions`, { method: "PATCH", body: actions });
+
+export const deleteConversationForMe = (conversationId: number) =>
+  apiFetch<void>(`/conversations/${conversationId}`, { method: "DELETE" });
+
+export const blockUser = (userId: number) =>
+  apiFetch<void>(`/users/${userId}/block`, { method: "POST" });
+export const unblockUser = (userId: number) =>
+  apiFetch<void>(`/users/${userId}/block`, { method: "DELETE" });
+
+export interface ConversationMedia {
+  id: number; url: string; mime: string; size_bytes: number | null;
+  message_id: number; created_at: string; sender_id: number;
+}
+export const listConversationMedia = (conversationId: number) =>
+  apiFetch<ConversationMedia[]>(`/conversations/${conversationId}/media`, { method: "GET" });
 
 /** `GET /conversations/{id}/messages?limit=&before=`. */
 export const listMessages = (
@@ -588,6 +613,9 @@ export const editMessage = (messageId: number, content: string) =>
 /** Unsend one of the current user's messages for every participant. */
 export const deleteMessage = (messageId: number) =>
   apiFetch<Message>(`/messages/${messageId}`, { method: "DELETE" });
+
+export const hideMessageForMe = (messageId: number) =>
+  apiFetch<void>(`/messages/${messageId}/for-me`, { method: "DELETE" });
 
 /** Forward a message to one or more direct or group conversations. */
 export const forwardMessage = (messageId: number, conversationIds: number[]) =>

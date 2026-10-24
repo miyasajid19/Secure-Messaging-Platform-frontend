@@ -53,11 +53,13 @@ const MAX_ROWS = 5;
 const LINE_PX = 20; // approximate single-line height in px
 const TYPING_DEBOUNCE_MS = 500;
 const TYPING_IDLE_MS = 6_000;
+const COMPOSER_EMOJIS = ["😀", "😂", "🥰", "😊", "😍", "😎", "🤔", "😢", "😮", "🙏", "👍", "👎", "👏", "🙌", "❤️", "🔥", "🎉", "✅", "💯", "😅", "😭", "🤝", "✨", "🚀"];
 
 export function Composer({ conversationId, currentUser, onSend }: Props) {
   const [value, setValue] = useState("");
   const [composing, setComposing] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -357,14 +359,24 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
   const disabled = !conversationId || empty || !currentUser || !wsReady || uploading;
   const sendAria = uploading ? "Uploading attachments" : `Send${disabled ? " (disabled)" : ""}`;
 
-  function placeholderFeature(name: string) {
-    return () => toast.info(`${name} — coming soon`, { duration: 2000 });
+  function insertEmoji(emoji: string) {
+    const textarea = taRef.current;
+    const start = textarea?.selectionStart ?? value.length;
+    const end = textarea?.selectionEnd ?? value.length;
+    const next = `${value.slice(0, start)}${emoji}${value.slice(end)}`;
+    handleChange(next);
+    setEmojiPickerOpen(false);
+    requestAnimationFrame(() => {
+      const input = taRef.current;
+      input?.focus();
+      input?.setSelectionRange(start + emoji.length, start + emoji.length);
+    });
   }
 
   return (
     <form
       onSubmit={handleSubmit}
-      className="flex min-w-0 max-w-full flex-col gap-0 overflow-hidden border-t"
+      className="flex min-w-0 max-w-full flex-col gap-0 overflow-visible border-t"
       style={{
         borderColor: "var(--color-border-subtle)",
         opacity: wsReady ? 1 : 0.75,
@@ -431,14 +443,20 @@ export function Composer({ conversationId, currentUser, onSend }: Props) {
       >
         <Paperclip size={18} />
       </button>
-      <button
-        type="button"
-        onClick={placeholderFeature("Emoji")}
-        aria-label="Open emoji picker"
-        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-tertiary)] active:bg-[var(--color-bg-tertiary)]"
-      >
-        <Smile size={18} />
-      </button>
+      <div className="relative shrink-0">
+        <button
+          type="button"
+          onClick={() => setEmojiPickerOpen((open) => !open)}
+          aria-label="Open emoji picker"
+          aria-expanded={emojiPickerOpen}
+          className="flex h-11 w-11 items-center justify-center rounded-full text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-tertiary)] active:bg-[var(--color-bg-tertiary)]"
+        >
+          <Smile size={18} />
+        </button>
+        {emojiPickerOpen ? <div aria-label="Choose an emoji" className="absolute bottom-full left-0 z-40 mb-2 grid w-64 grid-cols-6 gap-1 rounded-xl border bg-[var(--color-bg-elevated)] p-2 shadow-xl" style={{ borderColor: "var(--color-border-subtle)" }}>
+          {COMPOSER_EMOJIS.map((emoji) => <button key={emoji} type="button" onClick={() => insertEmoji(emoji)} aria-label={`Insert ${emoji}`} className="flex h-9 w-9 items-center justify-center rounded-lg text-xl transition hover:bg-[var(--color-bg-tertiary)]">{emoji}</button>)}
+        </div> : null}
+      </div>
       <label className="sr-only" htmlFor="composer-input">
         Message
       </label>
