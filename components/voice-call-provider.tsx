@@ -10,7 +10,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-import { Camera, CameraOff, Maximize2, Mic, MicOff, Minimize2, Phone, PhoneOff, PictureInPicture2, Signal, Video } from "lucide-react";
+import { Camera, CameraOff, Maximize2, Mic, MicOff, Minimize2, MonitorOff, MonitorUp, Phone, PhoneOff, PictureInPicture2, Signal, Video } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar } from "@/components/avatar";
 import { useAuthStore } from "@/store/auth";
@@ -47,12 +47,14 @@ type MiniCallCardProps = {
   onRestore: () => void;
   onMute: () => void;
   onCamera: () => void;
+  onScreenShare: () => void;
+  isScreenSharing: boolean;
   onEnd: () => void;
   onAccept: () => void;
   onPictureInPicture: () => void;
 };
 
-function MiniCallCard({ call, participants, streams, duration, networkQuality, self, onRestore, onMute, onCamera, onEnd, onAccept, onPictureInPicture }: MiniCallCardProps) {
+function MiniCallCard({ call, participants, streams, duration, networkQuality, self, onRestore, onMute, onCamera, onScreenShare, isScreenSharing, onEnd, onAccept, onPictureInPicture }: MiniCallCardProps) {
   const cardRef = useRef<HTMLElement>(null);
   const dragRef = useRef<{ pointerId: number; startX: number; startY: number; left: number; top: number; moved: boolean } | null>(null);
   const resizeRef = useRef<{ pointerId: number; startX: number; startY: number; left: number; top: number; width: number; height: number } | null>(null);
@@ -179,6 +181,7 @@ function MiniCallCard({ call, participants, streams, duration, networkQuality, s
         <button type="button" onClick={onAccept} aria-label={`Answer ${isVideo ? "video" : "voice"} call`} className="flex h-10 w-10 items-center justify-center rounded-full bg-green-600 text-white hover:bg-green-700">{isVideo ? <Video size={18} /> : <Phone size={18} />}</button>
       </> : <>
         {isVideo ? <button type="button" onClick={onPictureInPicture} aria-label="Open video in picture-in-picture" title="Picture-in-picture" className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--color-bg-tertiary)] hover:brightness-95"><PictureInPicture2 size={18} /></button> : null}
+        {isVideo ? <button type="button" onClick={onScreenShare} aria-label={isScreenSharing ? "Stop screen sharing" : "Share screen"} title={isScreenSharing ? "Stop screen sharing" : "Share screen"} className={`flex h-10 w-10 items-center justify-center rounded-full ${isScreenSharing ? "bg-[var(--color-accent)] text-white" : "bg-[var(--color-bg-tertiary)]"} hover:brightness-95`}>{isScreenSharing ? <MonitorOff size={18} /> : <MonitorUp size={18} />}</button> : null}
         <button type="button" onClick={onMute} aria-label={call.muted ? "Unmute microphone" : "Mute microphone"} title={call.muted ? "Unmute" : "Mute"} className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--color-bg-tertiary)] hover:brightness-95">{call.muted ? <MicOff size={18} /> : <Mic size={18} />}</button>
         {isVideo ? <button type="button" onClick={onCamera} aria-label={call.cameraOff ? "Turn camera on" : "Turn camera off"} title={call.cameraOff ? "Turn camera on" : "Turn camera off"} className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--color-bg-tertiary)] hover:brightness-95">{call.cameraOff ? <CameraOff size={18} /> : <Camera size={18} />}</button> : null}
         <button type="button" onClick={onEnd} aria-label="End call" className="flex h-10 w-10 items-center justify-center rounded-full bg-red-600 text-white hover:bg-red-700"><PhoneOff size={18} /></button>
@@ -296,6 +299,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
   const [remoteStreams, setRemoteStreams] = useState<Record<number, MediaStream>>({});
   const [clock, setClock] = useState(0);
   const [networkQuality, setNetworkQuality] = useState<NetworkQuality>("checking");
+  const [screenSharing, setScreenSharing] = useState(false);
 
   useEffect(() => {
     setClock(Date.now());
@@ -303,11 +307,85 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
   const callRef = useRef<CallState | null>(null);
   const peerConnectionsRef = useRef(new Map<number, RTCPeerConnection>());
   const localStreamRef = useRef<MediaStream | null>(null);
+  const screenStreamRef = useRef<MediaStream | null>(null);
   const remoteAudioElementsRef = useRef(new Map<number, HTMLAudioElement>());
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const pendingCandidatesRef = useRef(new Map<number, RTCIceCandidateInit[]>());
   const iceServerCacheRef = useRef<{ servers: IceServer[]; expiresAt: number } | null>(null);
   const iceServerRequestRef = useRef<Promise<IceServer[]> | null>(null);
+
+  const stopScreenShare = useCallback(async () => {
+    const screenStream = screenStreamRef.current;
+    if (!screenStream) return;
+    screenStreamRef.current = null;
+    const screenTrack = screenStream.getVideoTracks()[0];
+    if (screenTrack) {
+      screenTrack.onended = null;
+      screenTrack.stop();
+    }
+    const cameraTrack = localStreamRef.current?.getVideoTracks()[0] ?? null;
+    await Promise.allSettled([...peerConnectionsRef.current.values()].map(async (connection) => {
+      const sender = connection.getSenders().find((item) => item.track?.kind === "video");
+      if (sender) await sender.replaceTrack(cameraTrack);
+    }));
+    setScreenSharing(false);
+    const current = callRef.current;
+    if (current) {
+      const recipients = current.isGroup
+        ? current.participants.filter((participant) => participant.id !== self?.id).map((participant) => participant.id)
+        : [current.peerId];
+      recipients.forEach((peerId) => sendCallSignal({ type: "call.camera", call_id: current.callId, conversation_id: current.conversationId, to_user_id: peerId, camera_off: current.cameraOff }));
+    }
+  }, [self?.id]);
+
+  async function toggleScreenShare() {
+    if (screenStreamRef.current) {
+      await stopScreenShare();
+      return;
+    }
+    const current = callRef.current;
+    if (!current || current.mediaType !== "video" || current.status !== "active") {
+      toast.info("Connect the video call before sharing your screen.");
+      return;
+    }
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      toast.error("Screen sharing is not supported by this browser.");
+      return;
+    }
+    let capturedScreen: MediaStream | null = null;
+    try {
+      const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      capturedScreen = screenStream;
+      const screenTrack = screenStream.getVideoTracks()[0];
+      if (!screenTrack) {
+        screenStream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      const senders = [...peerConnectionsRef.current.values()].flatMap((connection) => connection.getSenders().filter((sender) => sender.track?.kind === "video"));
+      if (!senders.length) {
+        screenStream.getTracks().forEach((track) => track.stop());
+        toast.info("Wait for the video connection before sharing your screen.");
+        return;
+      }
+      await Promise.all(senders.map((sender) => sender.replaceTrack(screenTrack)));
+      screenStreamRef.current = screenStream;
+      screenTrack.onended = () => { void stopScreenShare(); };
+      setScreenSharing(true);
+      const recipients = current.isGroup
+        ? current.participants.filter((participant) => participant.id !== self?.id).map((participant) => participant.id)
+        : [current.peerId];
+      recipients.forEach((peerId) => sendCallSignal({ type: "call.camera", call_id: current.callId, conversation_id: current.conversationId, to_user_id: peerId, camera_off: false }));
+    } catch (error) {
+      capturedScreen?.getTracks().forEach((track) => track.stop());
+      const cameraTrack = localStreamRef.current?.getVideoTracks()[0] ?? null;
+      await Promise.allSettled([...peerConnectionsRef.current.values()].map(async (connection) => {
+        const sender = connection.getSenders().find((item) => item.track?.kind === "video");
+        if (sender && screenStreamRef.current !== capturedScreen) await sender.replaceTrack(cameraTrack);
+      }));
+      if (error instanceof DOMException && error.name === "NotAllowedError") return;
+      toast.error("Could not start screen sharing. Check your browser permissions and try again.");
+    }
+  }
 
   useEffect(() => {
     if (!call || call.status !== "active") {
@@ -355,6 +433,9 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     peerConnectionsRef.current.clear();
     updateCall(null);
     connections.forEach((connection) => connection.close());
+    screenStreamRef.current?.getTracks().forEach((track) => track.stop());
+    screenStreamRef.current = null;
+    setScreenSharing(false);
     localStreamRef.current?.getTracks().forEach((track) => track.stop());
     localStreamRef.current = null;
     pendingCandidatesRef.current.clear();
@@ -386,7 +467,10 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     if (existing) return existing;
     const pc = new RTCPeerConnection({ iceServers: await iceServers() });
     peerConnectionsRef.current.set(remoteUserId, pc);
-    localStreamRef.current?.getTracks().forEach((track) => pc.addTrack(track, localStreamRef.current!));
+    localStreamRef.current?.getTracks().forEach((track) => {
+      const outgoingTrack = track.kind === "video" ? screenStreamRef.current?.getVideoTracks()[0] ?? track : track;
+      pc.addTrack(outgoingTrack, localStreamRef.current!);
+    });
     pc.onicecandidate = (event) => {
       if (!event.candidate) return;
       sendCallSignal({
@@ -554,7 +638,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 
     const remoteUserId = signal.from_user_id ?? current.peerId;
     const pc = peerConnectionsRef.current.get(remoteUserId);
-    if (signal.type === "call.offer" && signal.description && (current.direction === "incoming" && current.status !== "ringing" || current.isGroup && current.status !== "ringing")) {
+    if (signal.type === "call.offer" && signal.description && (current.direction === "incoming" && current.status !== "ringing" || current.isGroup && current.status !== "ringing" || current.status === "active" || current.status === "reconnecting")) {
       try {
         const connection = pc ?? await createPeerConnection(current, remoteUserId);
         await connection.setRemoteDescription(signal.description);
@@ -875,6 +959,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
   function toggleCamera() {
     const current = callRef.current;
     if (!current || current.mediaType !== "video") return;
+    if (screenStreamRef.current) { toast.info("Stop screen sharing before changing your camera."); return; }
     const track = localStreamRef.current?.getVideoTracks()[0];
     if (!track) return;
     track.enabled = !track.enabled;
@@ -913,11 +998,11 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (localVideoRef.current && localStreamRef.current && call?.mediaType === "video") {
-      localVideoRef.current.srcObject = localStreamRef.current;
+      localVideoRef.current.srcObject = screenStreamRef.current ?? localStreamRef.current;
       void localVideoRef.current.play().catch(() => {});
     }
     return () => { if (localVideoRef.current) localVideoRef.current.srcObject = null; };
-  }, [call?.callId, call?.mediaType, call?.status]);
+  }, [call?.callId, call?.mediaType, call?.status, screenSharing]);
 
   const seconds = call?.startedAt ? Math.max(0, Math.floor((clock - call.startedAt) / 1000)) : 0;
   const duration = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
@@ -937,7 +1022,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
         audioElements={remoteAudioElementsRef.current}
         onPlaybackBlocked={setAudioNeedsInteraction}
       />)}
-      {call?.mediaType === "video" ? callMinimized ? <MiniCallCard call={call} participants={remoteParticipants} streams={remoteStreams} duration={duration} networkQuality={networkQuality} self={self} onRestore={() => setCallMinimized(false)} onMute={toggleMute} onCamera={toggleCamera} onEnd={declineOrEnd} onAccept={() => void acceptCall()} onPictureInPicture={() => void togglePictureInPicture()} /> : <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black p-3 sm:p-6" role="presentation">
+      {call?.mediaType === "video" ? callMinimized ? <MiniCallCard call={call} participants={remoteParticipants} streams={remoteStreams} duration={duration} networkQuality={networkQuality} self={self} onRestore={() => setCallMinimized(false)} onMute={toggleMute} onCamera={toggleCamera} onScreenShare={() => void toggleScreenShare()} isScreenSharing={screenSharing} onEnd={declineOrEnd} onAccept={() => void acceptCall()} onPictureInPicture={() => void togglePictureInPicture()} /> : <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black p-3 sm:p-6" role="presentation">
         <section role="dialog" aria-modal="true" aria-label="Video call" className="relative h-full max-h-[min(82vh,900px)] w-full max-w-5xl overflow-hidden rounded-3xl bg-neutral-950 text-white shadow-2xl">
           <div className="absolute inset-0 grid gap-3 p-3 sm:p-5" style={{ gridTemplateColumns: `repeat(${Math.max(1, Math.ceil(Math.sqrt(remoteParticipants.length || 1)))}, minmax(0, 1fr))` }}>
             {remoteParticipants.map((participant) => {
@@ -951,18 +1036,18 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
             {remoteParticipants.length === 0 ? <div className="flex min-h-0 flex-col items-center justify-center rounded-2xl bg-neutral-900"><Avatar subject={{ avatar_url: call.peerAvatarUrl, display_name: call.peerName }} size={112} showOnline={false} /><p className="mt-4 text-sm text-white/75">Waiting for group members…</p></div> : null}
           </div>
           {call.direction === "incoming" && call.status === "ringing" ? null : <div className="absolute bottom-24 right-5 z-10 flex aspect-video w-36 items-center justify-center overflow-hidden rounded-2xl border border-white/30 bg-neutral-900 shadow-lg sm:w-52">
-            {call.cameraOff ? <Avatar subject={{ avatar_url: self?.avatar_url ?? null, display_name: self?.display_name ?? self?.username ?? "You" }} size={76} showOnline={false} /> : <video ref={localVideoRef} autoPlay muted playsInline className="h-full w-full object-cover" />}
-            <span className="absolute bottom-2 left-2 rounded-full bg-black/45 px-2 py-0.5 text-xs">You</span>
+            {call.cameraOff && !screenSharing ? <Avatar subject={{ avatar_url: self?.avatar_url ?? null, display_name: self?.display_name ?? self?.username ?? "You" }} size={76} showOnline={false} /> : <video ref={localVideoRef} autoPlay muted playsInline className="h-full w-full object-cover" />}
+            <span className="absolute bottom-2 left-2 rounded-full bg-black/45 px-2 py-0.5 text-xs">{screenSharing ? "Your screen" : "You"}</span>
           </div>}
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/35 via-transparent to-black/45" />
           <div className="absolute left-5 top-5 z-10"><h2 className="text-xl font-semibold">{call.peerName}</h2><p aria-live="polite" className="text-sm text-white/80">{callStatusText(call, duration)}</p><ConnectionQuality quality={networkQuality} /></div>
           <div className="absolute right-5 top-5 z-20 flex gap-2"><button type="button" onClick={() => void togglePictureInPicture()} aria-label="Open video in picture-in-picture" title="Picture-in-picture" className="rounded-xl bg-white/15 p-2.5 text-white transition hover:bg-white/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"><PictureInPicture2 size={19} /></button><button type="button" onClick={() => setCallMinimized(true)} aria-label="Minimize call and return to chat" title="Minimize call" className="rounded-xl bg-white/15 p-2.5 text-white transition hover:bg-white/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"><Minimize2 size={19} /></button></div>
           {audioNeedsInteraction ? <button onClick={() => void enableCallAudio()} className="absolute left-1/2 top-5 z-20 -translate-x-1/2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-black shadow-lg hover:bg-white/90">Tap to enable audio</button> : null}
           <div className="absolute bottom-6 left-1/2 z-20 flex -translate-x-1/2 items-center gap-4 rounded-full bg-black/45 px-5 py-3 backdrop-blur-md">
-            {call.direction === "incoming" && call.status === "ringing" ? <><button onClick={declineOrEnd} aria-label="Decline call" className="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 hover:bg-red-700"><PhoneOff size={22} /></button><button onClick={() => void acceptCall()} aria-label="Answer video call" className="flex h-14 w-14 items-center justify-center rounded-full bg-green-600 hover:bg-green-700"><Video size={22} /></button></> : <><button onClick={toggleMute} aria-label={call.muted ? "Unmute microphone" : "Mute microphone"} className="flex h-12 w-12 items-center justify-center rounded-full bg-white/15 hover:bg-white/25">{call.muted ? <MicOff size={21} /> : <Mic size={21} />}</button><button onClick={toggleCamera} aria-label={call.cameraOff ? "Turn camera on" : "Turn camera off"} className="flex h-12 w-12 items-center justify-center rounded-full bg-white/15 hover:bg-white/25">{call.cameraOff ? <CameraOff size={21} /> : <Camera size={21} />}</button><button onClick={declineOrEnd} aria-label="Leave call" className="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 hover:bg-red-700"><PhoneOff size={22} /></button></>}
+            {call.direction === "incoming" && call.status === "ringing" ? <><button onClick={declineOrEnd} aria-label="Decline call" className="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 hover:bg-red-700"><PhoneOff size={22} /></button><button onClick={() => void acceptCall()} aria-label="Answer video call" className="flex h-14 w-14 items-center justify-center rounded-full bg-green-600 hover:bg-green-700"><Video size={22} /></button></> : <><button onClick={toggleMute} aria-label={call.muted ? "Unmute microphone" : "Mute microphone"} className="flex h-12 w-12 items-center justify-center rounded-full bg-white/15 hover:bg-white/25">{call.muted ? <MicOff size={21} /> : <Mic size={21} />}</button><button onClick={() => void toggleScreenShare()} aria-label={screenSharing ? "Stop screen sharing" : "Share screen"} title={screenSharing ? "Stop screen sharing" : "Share screen"} className={`flex h-12 w-12 items-center justify-center rounded-full ${screenSharing ? "bg-[var(--color-accent)]" : "bg-white/15 hover:bg-white/25"}`}>{screenSharing ? <MonitorOff size={21} /> : <MonitorUp size={21} />}</button><button onClick={toggleCamera} aria-label={call.cameraOff ? "Turn camera on" : "Turn camera off"} className="flex h-12 w-12 items-center justify-center rounded-full bg-white/15 hover:bg-white/25">{call.cameraOff ? <CameraOff size={21} /> : <Camera size={21} />}</button><button onClick={declineOrEnd} aria-label="Leave call" className="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 hover:bg-red-700"><PhoneOff size={22} /></button></>}
           </div>
         </section>
-      </div> : call ? callMinimized ? <MiniCallCard call={call} participants={remoteParticipants} streams={remoteStreams} duration={duration} networkQuality={networkQuality} self={self} onRestore={() => setCallMinimized(false)} onMute={toggleMute} onCamera={toggleCamera} onEnd={declineOrEnd} onAccept={() => void acceptCall()} onPictureInPicture={() => void togglePictureInPicture()} /> : <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm" role="presentation">
+      </div> : call ? callMinimized ? <MiniCallCard call={call} participants={remoteParticipants} streams={remoteStreams} duration={duration} networkQuality={networkQuality} self={self} onRestore={() => setCallMinimized(false)} onMute={toggleMute} onCamera={toggleCamera} onScreenShare={() => void toggleScreenShare()} isScreenSharing={screenSharing} onEnd={declineOrEnd} onAccept={() => void acceptCall()} onPictureInPicture={() => void togglePictureInPicture()} /> : <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm" role="presentation">
         <section role="dialog" aria-modal="true" aria-label="Voice call" className="w-full max-w-sm rounded-3xl border p-7 text-center shadow-2xl" style={{ backgroundColor: "var(--color-bg-primary)", borderColor: "var(--color-border-subtle)" }}>
           {call.isGroup ? <div className="mx-auto mb-4 flex -space-x-3 justify-center">{remoteParticipants.slice(0, 4).map((participant) => <Avatar key={participant.id} subject={{ avatar_url: participant.avatarUrl, display_name: participant.displayName }} size={52} showOnline={false} />)}</div> : <div className="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full ring-4 ring-[var(--color-bg-tertiary)]" style={{ boxShadow: call.status === "active" ? "0 0 0 6px rgb(22 163 74 / 15%)" : undefined }}><Avatar subject={{ avatar_url: call.peerAvatarUrl, display_name: call.peerName }} size={88} showOnline={false} /></div>}
           <div className="flex items-start justify-center gap-3"><div><h2 className="text-xl font-semibold text-[var(--color-fg-primary)]">{call.peerName}</h2>
