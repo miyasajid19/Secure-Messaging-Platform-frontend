@@ -34,6 +34,7 @@ import {
   Trash2,
   UserPlus,
   Video,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { EmptyState } from "./empty-state";
@@ -49,6 +50,8 @@ import {
   ApiError,
   listConversations,
   listMessages,
+  searchMessages,
+  getMessageContext,
   leaveGroup,
   markRead,
   queryKeys,
@@ -155,6 +158,39 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
     enabled: conversationId !== null,
     staleTime: 10_000,
   });
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<Message[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [viewingSearchResult, setViewingSearchResult] = useState(false);
+  const [jumpMessageId, setJumpMessageId] = useState<number | null>(null);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const query = searchQuery.trim();
+    setSearchError(null);
+    if (!searchOpen || conversationId == null || query.length < 2) {
+      setSearchResults([]);
+      setSearchLoading(false);
+      return;
+    }
+    setSearchLoading(true);
+    const timer = window.setTimeout(() => {
+      void searchMessages(conversationId, query)
+        .then((results) => { if (!cancelled) setSearchResults(results); })
+        .catch(() => { if (!cancelled) { setSearchResults([]); setSearchError("Search couldn't be completed. Try again."); } })
+        .finally(() => { if (!cancelled) setSearchLoading(false); });
+    }, 250);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [conversationId, searchOpen, searchQuery]);
+
+  useEffect(() => {
+    setSearchOpen(false);
+    setSearchQuery("");
+    setViewingSearchResult(false);
+  }, [conversationId]);
 
   // Read-on-open must wait for the messages query: on a hard refresh the
   // cache is empty when the conversation id changes, so an effect keyed
@@ -345,6 +381,18 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
   // current user sends a message). Bypasses the smart-scroll logic.
   const forceScrollToBottom = useRef(false);
 
+  useEffect(() => {
+    if (jumpMessageId == null) return;
+    const frame = requestAnimationFrame(() => {
+      const target = scrollRef.current?.querySelector<HTMLElement>(`[data-message-id="${jumpMessageId}"]`);
+      target?.scrollIntoView({ block: "center", behavior: "smooth" });
+      setHighlightedMessageId(jumpMessageId);
+      setJumpMessageId(null);
+      window.setTimeout(() => setHighlightedMessageId((current) => current === jumpMessageId ? null : current), 1800);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [allMessages, jumpMessageId]);
+
   /**
    * Scroll the message container to its bottom. `smooth` is nice for
    * user-driven scrolls; the call sites that need immediate (jump
@@ -357,6 +405,26 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
       top: el.scrollHeight,
       behavior: opts.smooth ? "smooth" : "auto",
     });
+  }
+
+  async function jumpToSearchResult(message: Message) {
+    if (conversationId == null) return;
+    try {
+      const context = await getMessageContext(conversationId, message.id);
+      getQueryClient().setQueryData<Message[]>(queryKeys.messages(conversationId), context);
+      setViewingSearchResult(true);
+      setSearchOpen(false);
+      setJumpMessageId(message.id);
+    } catch {
+      toast.error("Couldn't open that message. It may have expired or been deleted.");
+    }
+  }
+
+  async function returnToLatestMessages() {
+    setViewingSearchResult(false);
+    setPendingNewCount(0);
+    await messagesQuery.refetch();
+    requestAnimationFrame(() => requestAnimationFrame(() => scrollToBottom({ smooth: false })));
   }
 
   /**
@@ -570,6 +638,7 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
         onJoinGroupCall={() => { if (activeGroupCall) void joinGroupCall(activeGroupCall, conv.avatar_url); }}
         groupCallInviteCandidates={groupCallInviteCandidates}
         onInviteGroupCallMember={(userId) => { if (activeGroupCall) reinviteGroupCall(activeGroupCall, userId); }}
+        onSearchClick={() => { setSearchOpen((open) => !open); setSearchQuery(""); }}
         onVoiceCall={() => {
           if (!otherParticipant) return;
           void startCall(
@@ -591,11 +660,29 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
         }}
       />
 
+      {searchOpen ? <section className="z-20 border-b px-3 py-3 sm:px-4" style={{ backgroundColor: "var(--color-bg-primary)", borderColor: "var(--color-border-subtle)" }} aria-label="Search messages">
+        <div className="flex items-center gap-2 rounded-xl border px-3" style={{ borderColor: "var(--color-border-subtle)", backgroundColor: "var(--color-bg-secondary)" }}>
+          <Search size={17} className="shrink-0 text-[var(--color-fg-muted)]" />
+          <input autoFocus value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") setSearchOpen(false); }} placeholder="Search messages in this chat" aria-label="Search messages in this chat" className="h-11 min-w-0 flex-1 bg-transparent text-sm text-[var(--color-fg-primary)] outline-none placeholder:text-[var(--color-fg-muted)]" />
+          {searchLoading ? <span className="text-xs text-[var(--color-fg-muted)]">Searching…</span> : null}
+          <button type="button" onClick={() => setSearchOpen(false)} aria-label="Close search" className="rounded-lg p-1.5 text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-tertiary)]"><X size={17} /></button>
+        </div>
+        {searchQuery.trim().length < 2 ? <p className="px-2 pt-2 text-xs text-[var(--color-fg-muted)]">Enter at least 2 characters.</p> : searchError ? <p role="alert" className="px-2 pt-2 text-xs text-[var(--color-status-error)]">{searchError}</p> : !searchLoading && searchResults.length === 0 ? <p className="px-2 pt-2 text-xs text-[var(--color-fg-muted)]">No matching messages.</p> : searchResults.length ? <ul className="mt-2 max-h-64 overflow-y-auto">
+          {searchResults.map((result) => <li key={result.id}><button type="button" onClick={() => void jumpToSearchResult(result)} className="w-full rounded-lg px-3 py-2 text-left transition hover:bg-[var(--color-bg-tertiary)]">
+            <span className="flex items-center justify-between gap-3 text-xs text-[var(--color-fg-secondary)]"><span className="truncate font-medium">{result.sender.display_name ?? result.sender.username ?? result.sender.phone ?? "Signal user"}</span><time dateTime={result.created_at}>{new Date(result.created_at).toLocaleString()}</time></span>
+            <span className="mt-1 block truncate text-sm text-[var(--color-fg-primary)]">{result.content || (result.attachments.length ? "Attachment" : "Message")}</span>
+          </button></li>)}
+        </ul> : null}
+      </section> : null}
+
       <div
         ref={scrollRef}
         className="relative min-w-0 flex-1 overflow-x-hidden overflow-y-auto"
         aria-label="Messages"
       >
+        {viewingSearchResult ? <div className="sticky top-2 z-10 flex justify-center px-3">
+          <button type="button" onClick={() => void returnToLatestMessages()} className="rounded-full border px-3 py-1.5 text-xs font-semibold shadow-md" style={{ backgroundColor: "var(--color-bg-primary)", color: "var(--color-fg-primary)", borderColor: "var(--color-border-subtle)" }}>Back to latest messages</button>
+        </div> : null}
         {pendingNewCount > 0 ? (
           <button
             type="button"
@@ -643,7 +730,7 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
         ) : (
           <ul className="flex min-w-0 flex-col gap-1 overflow-x-hidden py-4">
             {allMessages.map((m) => (
-              <li key={String(m.id)}>
+              <li key={String(m.id)} data-message-id={m.id} className={`rounded-xl transition-colors duration-500 ${highlightedMessageId === m.id ? "bg-[var(--color-accent)]/10 ring-2 ring-[var(--color-accent)]/50" : ""}`}>
                 {m.type === "system" ? (
                   <SystemMessage message={m} />
                 ) : (
@@ -766,6 +853,7 @@ interface ChatHeaderProps {
   canGroupCall: boolean;
   onGroupAudioCall: () => void;
   onGroupVideoCall: () => void;
+  onSearchClick: () => void;
   showJoinGroupCall: boolean;
   onJoinGroupCall: () => void;
   groupCallInviteCandidates: Array<{ id: number; name: string }>;
@@ -791,6 +879,7 @@ function ChatHeader({
   canGroupCall,
   onGroupAudioCall,
   onGroupVideoCall,
+  onSearchClick,
   showJoinGroupCall,
   onJoinGroupCall,
   groupCallInviteCandidates,
@@ -862,7 +951,7 @@ function ChatHeader({
           {groupCallInviteCandidates.map((candidate) => <button key={candidate.id} type="button" onClick={() => { onInviteGroupCallMember(candidate.id); setInviteMenuOpen(false); }} className="block w-full rounded-lg px-3 py-2 text-left text-sm text-[var(--color-fg-primary)] hover:bg-[var(--color-bg-tertiary)]">Call {candidate.name} again</button>)}
         </div> : null}
       </div> : null}
-      <IconBtn aria-label="Search in conversation" onClick={() => toast.info("Search in chat — coming soon")} className="hidden sm:flex">
+      <IconBtn aria-label="Search in conversation" title="Search messages" onClick={onSearchClick}>
         <Search size={18} />
       </IconBtn>
       <div className="relative">

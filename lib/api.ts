@@ -386,6 +386,24 @@ export const listMessages = (
   );
 };
 
+/** Search text messages in one conversation (most recent matches first). */
+export const searchMessages = (conversationId: number, query: string) => {
+  const params = new URLSearchParams({ q: query, limit: "30" });
+  return apiFetch<Message[]>(
+    `/conversations/${conversationId}/messages/search?${params.toString()}`,
+    { method: "GET" },
+  );
+};
+
+/** Load a short timeline around a search match so it can be shown in context. */
+export const getMessageContext = (conversationId: number, messageId: number) => {
+  const params = new URLSearchParams({ message_id: String(messageId), radius: "25" });
+  return apiFetch<Message[]>(
+    `/conversations/${conversationId}/messages/context?${params.toString()}`,
+    { method: "GET" },
+  );
+};
+
 /** `GET /contacts`. */
 export const listContacts = () =>
   apiFetch<Contact[]>("/contacts", { method: "GET" });
