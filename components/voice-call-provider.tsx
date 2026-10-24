@@ -7,6 +7,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import { Camera, CameraOff, Maximize2, Mic, MicOff, Minimize2, Phone, PhoneOff, Video } from "lucide-react";
@@ -49,17 +50,60 @@ type MiniCallCardProps = {
 };
 
 function MiniCallCard({ call, participants, streams, duration, self, onRestore, onMute, onCamera, onEnd, onAccept }: MiniCallCardProps) {
+  const cardRef = useRef<HTMLElement>(null);
+  const dragRef = useRef<{ pointerId: number; startX: number; startY: number; left: number; top: number; moved: boolean } | null>(null);
+  const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
   const firstParticipant = participants[0];
   const ringing = call.direction === "incoming" && call.status === "ringing";
   const isVideo = call.mediaType === "video";
-  return <section aria-label={`${isVideo ? "Video" : "Voice"} call, minimized`} className="fixed bottom-24 right-4 z-[100] w-[min(340px,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-primary)] text-[var(--color-fg-primary)] shadow-2xl">
-    {isVideo ? <div className="relative h-40 bg-neutral-950">
+  const startDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    if (window.innerWidth < 640 || (event.target instanceof Element && event.target.closest("button"))) return;
+    const rect = cardRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    dragRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, left: rect.left, top: rect.top, moved: false };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const moveDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const dx = event.clientX - drag.startX;
+    const dy = event.clientY - drag.startY;
+    if (!drag.moved && Math.hypot(dx, dy) < 5) return;
+    drag.moved = true;
+    const card = cardRef.current;
+    if (!card) return;
+    const maxLeft = window.innerWidth - card.offsetWidth - 12;
+    const maxTop = window.innerHeight - card.offsetHeight - 12;
+    setPosition({ left: Math.min(Math.max(12, drag.left + dx), maxLeft), top: Math.min(Math.max(12, drag.top + dy), maxTop) });
+  };
+  const finishDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const card = cardRef.current;
+    if (drag.moved && card) {
+      const rect = card.getBoundingClientRect();
+      const left = rect.left + rect.width / 2 < window.innerWidth / 2 ? 12 : window.innerWidth - rect.width - 12;
+      const top = rect.top + rect.height / 2 < window.innerHeight / 2 ? 12 : window.innerHeight - rect.height - 12;
+      setPosition({ left, top });
+    }
+    dragRef.current = null;
+  };
+  const positionStyle = position ? { left: position.left, top: position.top } : undefined;
+  return <section ref={cardRef} style={positionStyle} aria-label={`${isVideo ? "Video" : "Voice"} call, minimized`} className={`fixed z-[100] w-[min(340px,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-primary)] text-[var(--color-fg-primary)] shadow-2xl max-sm:bottom-24 max-sm:right-2 max-sm:w-[calc(100vw-1rem)] ${position ? "" : "bottom-24 right-4"}`}>
+    {isVideo ? <>
+    <div className="relative hidden h-40 touch-none cursor-grab bg-neutral-950 active:cursor-grabbing sm:block" onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={finishDrag} onPointerCancel={finishDrag}>
       {firstParticipant ? <RemoteVideo stream={streams[firstParticipant.id]} name={firstParticipant.displayName} cameraOff={call.isGroup ? Boolean(call.peerCameraOffById[firstParticipant.id]) : call.peerCameraOff} avatarUrl={firstParticipant.avatarUrl} /> : <div className="flex h-full items-center justify-center"><Avatar subject={{ avatar_url: call.peerAvatarUrl, display_name: call.peerName }} size={80} showOnline={false} /></div>}
       <div className="absolute inset-x-0 bottom-0 flex items-end justify-between bg-gradient-to-t from-black/75 to-transparent p-3 text-white">
         <div className="min-w-0"><p className="truncate text-sm font-semibold">{call.peerName}</p><p className="text-xs text-white/75">{call.status === "active" ? duration : ringing ? "Incoming video call" : "Connecting…"}</p></div>
         <button type="button" onClick={onRestore} aria-label="Restore full-screen call" title="Return to call" className="rounded-lg bg-white/15 p-2 transition hover:bg-white/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"><Maximize2 size={17} /></button>
       </div>
-    </div> : <div className="flex items-center gap-3 p-3">
+    </div>
+    <div className="flex items-center gap-2 p-2 sm:hidden" onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={finishDrag} onPointerCancel={finishDrag}>
+      <Avatar subject={{ avatar_url: firstParticipant?.avatarUrl ?? call.peerAvatarUrl, display_name: firstParticipant?.displayName ?? call.peerName }} size={40} showOnline={false} />
+      <button type="button" onClick={onRestore} className="min-w-0 flex-1 text-left" aria-label="Restore full-screen call"><span className="block truncate text-sm font-semibold">{call.peerName}</span><span className="block text-xs text-[var(--color-fg-secondary)]">{call.status === "active" ? duration : ringing ? "Incoming video call" : "Connecting…"}</span></button>
+      <button type="button" onClick={onRestore} aria-label="Restore full-screen call" className="rounded-lg p-2 text-[var(--color-fg-secondary)]"><Maximize2 size={17} /></button>
+    </div>
+    </> : <div className="flex items-center gap-3 p-3 touch-none cursor-grab active:cursor-grabbing" onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={finishDrag} onPointerCancel={finishDrag}>
       {call.isGroup ? <div className="flex -space-x-3">{participants.slice(0, 3).map((participant) => <Avatar key={participant.id} subject={{ avatar_url: participant.avatarUrl, display_name: participant.displayName }} size={42} showOnline={false} />)}</div> : <Avatar subject={{ avatar_url: call.peerAvatarUrl, display_name: call.peerName }} size={44} showOnline={false} />}
       <button type="button" onClick={onRestore} className="min-w-0 flex-1 text-left" aria-label="Restore full-screen call"><span className="block truncate text-sm font-semibold">{call.peerName}</span><span className="block text-xs text-[var(--color-fg-secondary)]">{call.status === "active" ? duration : ringing ? "Incoming voice call" : "Connecting…"}</span></button>
       <button type="button" onClick={onRestore} aria-label="Restore full-screen call" title="Return to call" className="rounded-lg p-2 text-[var(--color-fg-secondary)] transition hover:bg-[var(--color-bg-tertiary)]"><Maximize2 size={17} /></button>
