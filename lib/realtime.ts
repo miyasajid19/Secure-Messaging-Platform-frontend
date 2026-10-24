@@ -115,6 +115,10 @@ interface MessageNew {
   type: "message.new";
   message: BackendMessageOut;
 }
+interface MessageUpdated {
+  type: "message.updated";
+  message: BackendMessageOut;
+}
 interface MessageReadBulk {
   type: "message.read.bulk";
   conversation_id: number;
@@ -162,8 +166,12 @@ interface BackendMessageOut {
   content?: string;
   type?: Message["type"];
   created_at?: string;
+  edited_at?: string | null;
+  previous_content?: string | null;
   parent_id?: number | null;
   attachments?: Message["attachments"];
+  seen_by?: Message["seen_by"];
+  reactions?: Message["reactions"];
   disappear_after_seconds?: number | null;
   status?: string;
 }
@@ -342,6 +350,9 @@ function route(msg: IncomingMessage) {
     case "message.new":
       handleMessageNew(msg as unknown as MessageNew);
       break;
+    case "message.updated":
+      handleMessageUpdated(msg as unknown as MessageUpdated);
+      break;
     case "message.delivered":
       handleMessageDelivered(msg as unknown as MessageDelivered);
       break;
@@ -422,6 +433,19 @@ function handleMessageNew(msg: MessageNew) {
       }
     }
   }
+  void qc.invalidateQueries({ queryKey: queryKeys.conversations });
+}
+
+function handleMessageUpdated(msg: MessageUpdated) {
+  const qc = getQueryClient();
+  const updated = normalizeIncoming(msg.message);
+  if (!updated) return;
+  qc.setQueryData<Message[]>(
+    queryKeys.messages(updated.conversation_id),
+    (prev) => prev?.map((message) => message.id === updated.id
+      ? { ...message, ...updated, status: message.status ?? updated.status }
+      : message),
+  );
   void qc.invalidateQueries({ queryKey: queryKeys.conversations });
 }
 
@@ -576,9 +600,13 @@ function normalizeIncoming(raw: BackendMessageOut): Message | null {
     content: raw.content ?? "",
     type: raw.type ?? "text",
     created_at: raw.created_at ?? new Date().toISOString(),
+    edited_at: raw.edited_at ?? null,
+    previous_content: raw.previous_content ?? null,
     disappear_after_seconds: raw.disappear_after_seconds ?? null,
     parent_id: raw.parent_id ?? null,
     attachments: raw.attachments ?? [],
+    seen_by: raw.seen_by ?? [],
+    reactions: raw.reactions ?? [],
     status: isMine
       ? mapBackendStatus(raw.status) ?? "sent"
       : undefined,

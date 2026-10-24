@@ -31,6 +31,7 @@ import {
   Download,
   FileText,
   Loader2,
+  Pencil,
   SmilePlus,
   Timer,
   X,
@@ -42,7 +43,7 @@ import { formatBubbleTime } from "@/lib/format";
 import { SeenByAvatars } from "./seen-by-avatars";
 import { useReplyStore, type ReplyTarget } from "@/store/reply";
 import { getQueryClient, queryKeys } from "@/lib/api";
-import { addReaction, removeReaction, ApiError } from "@/lib/api";
+import { addReaction, removeReaction, editMessage, ApiError } from "@/lib/api";
 import { toast } from "sonner";
 
 interface Props {
@@ -88,6 +89,10 @@ export function MessageBubble({
     attachment.mime.startsWith("image/"),
   );
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [editValue, setEditValue] = useState(message.content);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [previousVersionOpen, setPreviousVersionOpen] = useState(false);
   const isImageGallery =
     attachments.length > 1 &&
     attachments.every((attachment) => attachment.mime.startsWith("image/"));
@@ -121,6 +126,13 @@ export function MessageBubble({
     return () => window.clearInterval(handle);
   }, [message.created_at, message.disappear_after_seconds]);
   const isDisappearing = message.disappear_after_seconds != null;
+  const canEditUntil = parseMessageTimestamp(message.created_at) + 13 * 60 * 1000;
+  const editWindowOpen = now < canEditUntil;
+  useEffect(() => {
+    if (!isOutgoing || message.type !== "text" || attachments.length > 0 || !editWindowOpen) return;
+    const timer = window.setTimeout(() => setNow(Date.now()), Math.max(0, canEditUntil - Date.now()) + 25);
+    return () => window.clearTimeout(timer);
+  }, [attachments.length, canEditUntil, editWindowOpen, isOutgoing, message.type]);
   useEffect(() => {
     if (lightboxIndex === null) return;
 
@@ -188,6 +200,48 @@ export function MessageBubble({
         (parent?.attachments?.length ? "📎 Attachment" : message.content.slice(0, 120)),
       type: message.type,
     });
+  }
+
+  function startEditing() {
+    if (Date.now() >= canEditUntil) {
+      setNow(Date.now());
+      toast.error("Messages can only be edited for 13 minutes after sending.");
+      return;
+    }
+    setEditValue(message.content);
+    setEditing(true);
+  }
+
+  async function saveEdit() {
+    const content = editValue.trim();
+    if (!content) {
+      toast.error("Message text cannot be empty.");
+      return;
+    }
+    if (content.length > 10_000) {
+      toast.error("Message text must be 10,000 characters or fewer.");
+      return;
+    }
+    if (content === message.content) {
+      setEditing(false);
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      const updated = await editMessage(message.id, content);
+      const qc = getQueryClient();
+      qc.setQueryData<Message[]>(queryKeys.messages(message.conversation_id), (previous) =>
+        previous?.map((item) => item.id === updated.id
+          ? { ...item, ...updated, status: item.status ?? updated.status }
+          : item),
+      );
+      void qc.invalidateQueries({ queryKey: queryKeys.conversations });
+      setEditing(false);
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : "Couldn't edit this message.");
+    } finally {
+      setSavingEdit(false);
+    }
   }
 
   // Phase 8.2 — reaction picker state. Toggling the same emoji the
@@ -312,7 +366,7 @@ export function MessageBubble({
           </span>
         ) : null}
 
-        <div
+        {!editing ? <div
           role="toolbar"
           aria-label="Message actions"
           className="pointer-events-none absolute top-1/2 z-30 flex -translate-y-1/2 items-center gap-1 rounded-full border bg-[var(--color-bg-elevated)] p-1 opacity-0 shadow-lg transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
@@ -339,7 +393,14 @@ export function MessageBubble({
           >
             <SmilePlus size={16} aria-hidden />
           </button>
-        </div>
+          {isOutgoing && message.type === "text" && attachments.length === 0 && editWindowOpen ? <button
+            type="button"
+            aria-label="Edit message"
+            title="Edit message"
+            onClick={startEditing}
+            className="flex h-11 w-11 items-center justify-center rounded-full text-[var(--color-fg-secondary)] transition-colors hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-fg-primary)] active:bg-[var(--color-bg-tertiary)] focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
+          ><Pencil size={16} aria-hidden /></button> : null}
+        </div> : null}
 
         {/* Phase 8.2 — emoji picker popover. Shown after the user
             picks "React" in the context menu. Quick row of 6 common
@@ -386,7 +447,27 @@ export function MessageBubble({
             ...(isImageOnly ? { boxShadow: "none", outline: "none" } : {}),
           }}
         >
-          {message.content ? (
+          {editing ? <div className="flex min-w-[min(70vw,20rem)] flex-col gap-2" data-edit-message>
+            <textarea
+              autoFocus
+              value={editValue}
+              maxLength={10_000}
+              aria-label="Edit message text"
+              onChange={(event) => setEditValue(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") { setEditing(false); setEditValue(message.content); }
+                if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void saveEdit(); }
+              }}
+              className="min-h-20 w-full resize-y rounded-lg border border-black/10 bg-white/10 px-2 py-1.5 text-sm text-inherit outline-none focus:border-[var(--color-accent)]"
+            />
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[10px] opacity-70">Ctrl/⌘ + Enter to save</span>
+              <div className="flex gap-1.5">
+                <button type="button" disabled={savingEdit} onClick={() => { setEditing(false); setEditValue(message.content); }} className="rounded-md px-2 py-1 text-xs font-medium hover:bg-black/10 disabled:opacity-50">Cancel</button>
+                <button type="button" disabled={savingEdit || !editValue.trim()} onClick={() => void saveEdit()} className="inline-flex items-center gap-1 rounded-md bg-[var(--color-accent)] px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-50">{savingEdit ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}Save</button>
+              </div>
+            </div>
+          </div> : message.content ? (
             <span className="whitespace-pre-wrap break-words text-sm leading-snug">
               {message.content}
             </span>
@@ -472,7 +553,18 @@ export function MessageBubble({
               {formatRemaining(remainingMs)}
             </span>
           ) : null}
+          {message.edited_at ? <button
+            type="button"
+            aria-expanded={previousVersionOpen}
+            onClick={() => setPreviousVersionOpen((open) => !open)}
+            className="text-[10px] font-medium text-[var(--color-fg-muted)] underline decoration-dotted underline-offset-2 hover:text-[var(--color-fg-primary)]"
+            title={new Date(message.edited_at).toLocaleString()}
+          >Edited</button> : null}
         </div>
+        {previousVersionOpen && message.edited_at ? <div className={`max-w-[min(78vw,28rem)] rounded-xl border px-3 py-2 text-xs shadow-md ${isOutgoing ? "self-end" : "self-start"}`} style={{ backgroundColor: "var(--color-bg-elevated)", borderColor: "var(--color-border-subtle)", color: "var(--color-fg-primary)" }}>
+          <div className="mb-1 flex items-center justify-between gap-4"><span className="font-semibold">Previous message</span><button type="button" onClick={() => setPreviousVersionOpen(false)} aria-label="Close previous message" className="rounded p-0.5 hover:bg-[var(--color-bg-tertiary)]"><X size={13} /></button></div>
+          <p className="whitespace-pre-wrap break-words">{message.previous_content ?? "Previous text unavailable."}</p>
+        </div> : null}
         {showSeenBy ? <SeenByAvatars users={seenBy} /> : null}
         {reactions.length > 0 ? (
           <ReactionRow

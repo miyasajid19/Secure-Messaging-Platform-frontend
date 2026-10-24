@@ -142,6 +142,8 @@ export interface Message {
   content: string;
   type: MessageType;
   created_at: string;
+  edited_at?: string | null;
+  previous_content?: string | null;
   /** Timer copied from the conversation when this message was sent. */
   disappear_after_seconds?: number | null;
   /** Nested user card from the backend's `MessageOut.sender`. */
@@ -568,6 +570,13 @@ export const sendMessage = (
   apiFetch<Message>(`/conversations/${conversationId}/messages`, {
     method: "POST",
     body,
+  });
+
+/** Edit only the text of an existing text-only message. */
+export const editMessage = (messageId: number, content: string) =>
+  apiFetch<Message>(`/messages/${messageId}`, {
+    method: "PATCH",
+    body: { content },
   });
 
 /** Upload files through the authenticated backend; ImageKit credentials stay server-side. */
