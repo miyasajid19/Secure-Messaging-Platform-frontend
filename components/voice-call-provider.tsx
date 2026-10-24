@@ -10,7 +10,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-import { Camera, CameraOff, Maximize2, Mic, MicOff, Minimize2, Phone, PhoneOff, Video } from "lucide-react";
+import { Camera, CameraOff, Maximize2, Mic, MicOff, Minimize2, Phone, PhoneOff, PictureInPicture2, Video } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar } from "@/components/avatar";
 import { useAuthStore } from "@/store/auth";
@@ -47,9 +47,10 @@ type MiniCallCardProps = {
   onCamera: () => void;
   onEnd: () => void;
   onAccept: () => void;
+  onPictureInPicture: () => void;
 };
 
-function MiniCallCard({ call, participants, streams, duration, self, onRestore, onMute, onCamera, onEnd, onAccept }: MiniCallCardProps) {
+function MiniCallCard({ call, participants, streams, duration, self, onRestore, onMute, onCamera, onEnd, onAccept, onPictureInPicture }: MiniCallCardProps) {
   const cardRef = useRef<HTMLElement>(null);
   const dragRef = useRef<{ pointerId: number; startX: number; startY: number; left: number; top: number; moved: boolean } | null>(null);
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
@@ -113,6 +114,7 @@ function MiniCallCard({ call, participants, streams, duration, self, onRestore, 
         <button type="button" onClick={onEnd} aria-label="Decline call" className="flex h-10 w-10 items-center justify-center rounded-full bg-red-600 text-white hover:bg-red-700"><PhoneOff size={18} /></button>
         <button type="button" onClick={onAccept} aria-label={`Answer ${isVideo ? "video" : "voice"} call`} className="flex h-10 w-10 items-center justify-center rounded-full bg-green-600 text-white hover:bg-green-700">{isVideo ? <Video size={18} /> : <Phone size={18} />}</button>
       </> : <>
+        {isVideo ? <button type="button" onClick={onPictureInPicture} aria-label="Open video in picture-in-picture" title="Picture-in-picture" className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--color-bg-tertiary)] hover:brightness-95"><PictureInPicture2 size={18} /></button> : null}
         <button type="button" onClick={onMute} aria-label={call.muted ? "Unmute microphone" : "Mute microphone"} title={call.muted ? "Unmute" : "Mute"} className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--color-bg-tertiary)] hover:brightness-95">{call.muted ? <MicOff size={18} /> : <Mic size={18} />}</button>
         {isVideo ? <button type="button" onClick={onCamera} aria-label={call.cameraOff ? "Turn camera on" : "Turn camera off"} title={call.cameraOff ? "Turn camera on" : "Turn camera off"} className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--color-bg-tertiary)] hover:brightness-95">{call.cameraOff ? <CameraOff size={18} /> : <Camera size={18} />}</button> : null}
         <button type="button" onClick={onEnd} aria-label="End call" className="flex h-10 w-10 items-center justify-center rounded-full bg-red-600 text-white hover:bg-red-700"><PhoneOff size={18} /></button>
@@ -151,7 +153,7 @@ function RemoteVideo({ stream, name, cameraOff, avatarUrl }: {
   }, [stream, cameraOff]);
 
   return stream && !cameraOff
-    ? <video ref={videoRef} autoPlay playsInline className="h-full w-full object-cover" />
+    ? <video ref={videoRef} data-call-remote-video autoPlay muted playsInline className="h-full w-full object-cover" />
     : <Avatar subject={{ avatar_url: avatarUrl, display_name: name }} size={112} showOnline={false} />;
 }
 
@@ -774,6 +776,24 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     setAudioNeedsInteraction(results.some((result) => result.status === "rejected"));
   }
 
+  async function togglePictureInPicture() {
+    const video = document.querySelector<HTMLVideoElement>("video[data-call-remote-video]");
+    if (!video) {
+      toast.info("Picture-in-picture is available once the other person’s video appears.");
+      return;
+    }
+    if (!document.pictureInPictureEnabled || !video.requestPictureInPicture) {
+      toast.error("Picture-in-picture is not supported by this browser.");
+      return;
+    }
+    try {
+      if (document.pictureInPictureElement === video) await document.exitPictureInPicture();
+      else await video.requestPictureInPicture();
+    } catch {
+      toast.error("Could not open picture-in-picture. Try again after the video connects.");
+    }
+  }
+
   useEffect(() => {
     if (localVideoRef.current && localStreamRef.current && call?.mediaType === "video") {
       localVideoRef.current.srcObject = localStreamRef.current;
@@ -800,7 +820,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
         audioElements={remoteAudioElementsRef.current}
         onPlaybackBlocked={setAudioNeedsInteraction}
       />)}
-      {call?.mediaType === "video" ? callMinimized ? <MiniCallCard call={call} participants={remoteParticipants} streams={remoteStreams} duration={duration} self={self} onRestore={() => setCallMinimized(false)} onMute={toggleMute} onCamera={toggleCamera} onEnd={declineOrEnd} onAccept={() => void acceptCall()} /> : <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black p-3 sm:p-6" role="presentation">
+      {call?.mediaType === "video" ? callMinimized ? <MiniCallCard call={call} participants={remoteParticipants} streams={remoteStreams} duration={duration} self={self} onRestore={() => setCallMinimized(false)} onMute={toggleMute} onCamera={toggleCamera} onEnd={declineOrEnd} onAccept={() => void acceptCall()} onPictureInPicture={() => void togglePictureInPicture()} /> : <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black p-3 sm:p-6" role="presentation">
         <section role="dialog" aria-modal="true" aria-label="Video call" className="relative h-full max-h-[min(82vh,900px)] w-full max-w-5xl overflow-hidden rounded-3xl bg-neutral-950 text-white shadow-2xl">
           <div className="absolute inset-0 grid gap-3 p-3 sm:p-5" style={{ gridTemplateColumns: `repeat(${Math.max(1, Math.ceil(Math.sqrt(remoteParticipants.length || 1)))}, minmax(0, 1fr))` }}>
             {remoteParticipants.map((participant) => {
@@ -819,13 +839,13 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
           </div>}
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/35 via-transparent to-black/45" />
           <div className="absolute left-5 top-5 z-10"><h2 className="text-xl font-semibold">{call.peerName}</h2><p className="text-sm text-white/80">{call.status === "active" ? duration : call.direction === "incoming" ? `Incoming ${call.isGroup ? "group " : ""}video call` : call.status === "connecting" ? "Connecting…" : "Calling…"}</p></div>
-          <button type="button" onClick={() => setCallMinimized(true)} aria-label="Minimize call and return to chat" title="Minimize call" className="absolute right-5 top-5 z-20 rounded-xl bg-white/15 p-2.5 text-white transition hover:bg-white/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"><Minimize2 size={19} /></button>
+          <div className="absolute right-5 top-5 z-20 flex gap-2"><button type="button" onClick={() => void togglePictureInPicture()} aria-label="Open video in picture-in-picture" title="Picture-in-picture" className="rounded-xl bg-white/15 p-2.5 text-white transition hover:bg-white/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"><PictureInPicture2 size={19} /></button><button type="button" onClick={() => setCallMinimized(true)} aria-label="Minimize call and return to chat" title="Minimize call" className="rounded-xl bg-white/15 p-2.5 text-white transition hover:bg-white/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"><Minimize2 size={19} /></button></div>
           {audioNeedsInteraction ? <button onClick={() => void enableCallAudio()} className="absolute left-1/2 top-5 z-20 -translate-x-1/2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-black shadow-lg hover:bg-white/90">Tap to enable audio</button> : null}
           <div className="absolute bottom-6 left-1/2 z-20 flex -translate-x-1/2 items-center gap-4 rounded-full bg-black/45 px-5 py-3 backdrop-blur-md">
             {call.direction === "incoming" && call.status === "ringing" ? <><button onClick={declineOrEnd} aria-label="Decline call" className="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 hover:bg-red-700"><PhoneOff size={22} /></button><button onClick={() => void acceptCall()} aria-label="Answer video call" className="flex h-14 w-14 items-center justify-center rounded-full bg-green-600 hover:bg-green-700"><Video size={22} /></button></> : <><button onClick={toggleMute} aria-label={call.muted ? "Unmute microphone" : "Mute microphone"} className="flex h-12 w-12 items-center justify-center rounded-full bg-white/15 hover:bg-white/25">{call.muted ? <MicOff size={21} /> : <Mic size={21} />}</button><button onClick={toggleCamera} aria-label={call.cameraOff ? "Turn camera on" : "Turn camera off"} className="flex h-12 w-12 items-center justify-center rounded-full bg-white/15 hover:bg-white/25">{call.cameraOff ? <CameraOff size={21} /> : <Camera size={21} />}</button><button onClick={declineOrEnd} aria-label="Leave call" className="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 hover:bg-red-700"><PhoneOff size={22} /></button></>}
           </div>
         </section>
-      </div> : call ? callMinimized ? <MiniCallCard call={call} participants={remoteParticipants} streams={remoteStreams} duration={duration} self={self} onRestore={() => setCallMinimized(false)} onMute={toggleMute} onCamera={toggleCamera} onEnd={declineOrEnd} onAccept={() => void acceptCall()} /> : <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm" role="presentation">
+      </div> : call ? callMinimized ? <MiniCallCard call={call} participants={remoteParticipants} streams={remoteStreams} duration={duration} self={self} onRestore={() => setCallMinimized(false)} onMute={toggleMute} onCamera={toggleCamera} onEnd={declineOrEnd} onAccept={() => void acceptCall()} onPictureInPicture={() => void togglePictureInPicture()} /> : <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm" role="presentation">
         <section role="dialog" aria-modal="true" aria-label="Voice call" className="w-full max-w-sm rounded-3xl border p-7 text-center shadow-2xl" style={{ backgroundColor: "var(--color-bg-primary)", borderColor: "var(--color-border-subtle)" }}>
           {call.isGroup ? <div className="mx-auto mb-4 flex -space-x-3 justify-center">{remoteParticipants.slice(0, 4).map((participant) => <Avatar key={participant.id} subject={{ avatar_url: participant.avatarUrl, display_name: participant.displayName }} size={52} showOnline={false} />)}</div> : <div className="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full ring-4 ring-[var(--color-bg-tertiary)]" style={{ boxShadow: call.status === "active" ? "0 0 0 6px rgb(22 163 74 / 15%)" : undefined }}><Avatar subject={{ avatar_url: call.peerAvatarUrl, display_name: call.peerName }} size={88} showOnline={false} /></div>}
           <div className="flex items-start justify-center gap-3"><div><h2 className="text-xl font-semibold text-[var(--color-fg-primary)]">{call.peerName}</h2>
