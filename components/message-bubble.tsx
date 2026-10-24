@@ -34,6 +34,7 @@ import {
   Pencil,
   SmilePlus,
   Timer,
+  Trash2,
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -43,7 +44,7 @@ import { formatBubbleTime } from "@/lib/format";
 import { SeenByAvatars } from "./seen-by-avatars";
 import { useReplyStore, type ReplyTarget } from "@/store/reply";
 import { getQueryClient, queryKeys } from "@/lib/api";
-import { addReaction, removeReaction, editMessage, ApiError } from "@/lib/api";
+import { addReaction, removeReaction, editMessage, deleteMessage, ApiError } from "@/lib/api";
 import { toast } from "sonner";
 
 interface Props {
@@ -92,6 +93,7 @@ export function MessageBubble({
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(message.content);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [unsending, setUnsending] = useState(false);
   const [previousVersionOpen, setPreviousVersionOpen] = useState(false);
   const isImageGallery =
     attachments.length > 1 &&
@@ -244,6 +246,26 @@ export function MessageBubble({
     }
   }
 
+  async function unsend() {
+    if (unsending || message.is_deleted) return;
+    if (!window.confirm("Unsend this message for everyone?")) return;
+    setUnsending(true);
+    try {
+      const updated = await deleteMessage(message.id);
+      const qc = getQueryClient();
+      qc.setQueryData<Message[]>(queryKeys.messages(message.conversation_id), (previous) =>
+        previous?.map((item) => item.id === updated.id
+          ? { ...item, ...updated, status: item.status ?? updated.status }
+          : item),
+      );
+      void qc.invalidateQueries({ queryKey: queryKeys.conversations });
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : "Couldn't unsend this message.");
+    } finally {
+      setUnsending(false);
+    }
+  }
+
   // Phase 8.2 — reaction picker state. Toggling the same emoji the
   // user already has removes their reaction; picking a new emoji
   // adds it. We optimistically mutate the message in the React
@@ -366,7 +388,7 @@ export function MessageBubble({
           </span>
         ) : null}
 
-        {!editing ? <div
+        {!message.is_deleted && !editing ? <div
           role="toolbar"
           aria-label="Message actions"
           className="pointer-events-none absolute top-1/2 z-30 flex -translate-y-1/2 items-center gap-1 rounded-full border bg-[var(--color-bg-elevated)] p-1 opacity-0 shadow-lg transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
@@ -400,12 +422,20 @@ export function MessageBubble({
             onClick={startEditing}
             className="flex h-11 w-11 items-center justify-center rounded-full text-[var(--color-fg-secondary)] transition-colors hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-fg-primary)] active:bg-[var(--color-bg-tertiary)] focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
           ><Pencil size={16} aria-hidden /></button> : null}
+          {isOutgoing ? <button
+            type="button"
+            aria-label="Unsend message"
+            title="Unsend message"
+            disabled={unsending}
+            onClick={() => void unsend()}
+            className="flex h-11 w-11 items-center justify-center rounded-full text-[var(--color-fg-secondary)] transition-colors hover:bg-red-500/10 hover:text-red-500 active:bg-red-500/10 focus-visible:outline-2 focus-visible:outline-[var(--color-accent)] disabled:opacity-50"
+          >{unsending ? <Loader2 size={16} className="animate-spin" aria-hidden /> : <Trash2 size={16} aria-hidden />}</button> : null}
         </div> : null}
 
         {/* Phase 8.2 — emoji picker popover. Shown after the user
             picks "React" in the context menu. Quick row of 6 common
             emojis + a second row of 3 more, per spec. */}
-        {pickerOpen ? (
+        {!message.is_deleted && pickerOpen ? (
           <EmojiPicker
             onPick={(emoji) => toggleReaction(emoji)}
             onClose={() => setPickerOpen(false)}
@@ -447,7 +477,7 @@ export function MessageBubble({
             ...(isImageOnly ? { boxShadow: "none", outline: "none" } : {}),
           }}
         >
-          {editing ? <div className="flex min-w-[min(70vw,20rem)] flex-col gap-2" data-edit-message>
+          {message.is_deleted ? <span className="text-sm italic opacity-75">{isOutgoing ? "You deleted a message" : "This message was deleted"}</span> : editing ? <div className="flex min-w-[min(70vw,20rem)] flex-col gap-2" data-edit-message>
             <textarea
               autoFocus
               value={editValue}
@@ -522,7 +552,7 @@ export function MessageBubble({
               );
             })}
           </div>
-          {isOutgoing ? (
+          {isOutgoing && !message.is_deleted ? (
             <div className="-mt-0.5 flex min-h-4 items-center justify-end">
               <ReceiptMark
                 status={message.status}
@@ -553,7 +583,7 @@ export function MessageBubble({
               {formatRemaining(remainingMs)}
             </span>
           ) : null}
-          {message.edited_at ? <button
+          {!message.is_deleted && message.edited_at ? <button
             type="button"
             aria-expanded={previousVersionOpen}
             onClick={() => setPreviousVersionOpen((open) => !open)}
@@ -561,12 +591,12 @@ export function MessageBubble({
             title={new Date(message.edited_at).toLocaleString()}
           >Edited</button> : null}
         </div>
-        {previousVersionOpen && message.edited_at ? <div className={`max-w-[min(78vw,28rem)] rounded-xl border px-3 py-2 text-xs shadow-md ${isOutgoing ? "self-end" : "self-start"}`} style={{ backgroundColor: "var(--color-bg-elevated)", borderColor: "var(--color-border-subtle)", color: "var(--color-fg-primary)" }}>
+        {!message.is_deleted && previousVersionOpen && message.edited_at ? <div className={`max-w-[min(78vw,28rem)] rounded-xl border px-3 py-2 text-xs shadow-md ${isOutgoing ? "self-end" : "self-start"}`} style={{ backgroundColor: "var(--color-bg-elevated)", borderColor: "var(--color-border-subtle)", color: "var(--color-fg-primary)" }}>
           <div className="mb-1 flex items-center justify-between gap-4"><span className="font-semibold">Previous message</span><button type="button" onClick={() => setPreviousVersionOpen(false)} aria-label="Close previous message" className="rounded p-0.5 hover:bg-[var(--color-bg-tertiary)]"><X size={13} /></button></div>
           <p className="whitespace-pre-wrap break-words">{message.previous_content ?? "Previous text unavailable."}</p>
         </div> : null}
         {showSeenBy ? <SeenByAvatars users={seenBy} /> : null}
-        {reactions.length > 0 ? (
+        {!message.is_deleted && reactions.length > 0 ? (
           <ReactionRow
             reactions={reactions}
             currentUserId={currentUserId}

@@ -133,6 +133,7 @@ export interface MessagePreview {
   content: string;
   created_at: string;
   type: MessageType;
+  is_deleted?: boolean;
 }
 
 export interface Message {
@@ -142,6 +143,7 @@ export interface Message {
   content: string;
   type: MessageType;
   created_at: string;
+  is_deleted?: boolean;
   edited_at?: string | null;
   previous_content?: string | null;
   /** Timer copied from the conversation when this message was sent. */
@@ -578,6 +580,10 @@ export const editMessage = (messageId: number, content: string) =>
     method: "PATCH",
     body: { content },
   });
+
+/** Unsend one of the current user's messages for every participant. */
+export const deleteMessage = (messageId: number) =>
+  apiFetch<Message>(`/messages/${messageId}`, { method: "DELETE" });
 
 /** Upload files through the authenticated backend; ImageKit credentials stay server-side. */
 export async function uploadMessageAttachments(conversationId: number, files: File[]) {
