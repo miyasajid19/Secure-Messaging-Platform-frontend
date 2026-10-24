@@ -32,6 +32,7 @@ import {
   Search,
   Settings,
   Trash2,
+  UserPlus,
   Video,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -107,7 +108,7 @@ function outgoingReadersForMessage(
 }
 
 export function ChatPane({ showBackButton = false, onBack }: Props) {
-  const { startCall, startGroupCall, joinGroupCall } = useVoiceCall();
+  const { startCall, startGroupCall, joinGroupCall, reinviteGroupCall } = useVoiceCall();
   const conversationId = useUiStore((s) => s.selectedConversationId);
   const setSelectedConversation = useUiStore((s) => s.setSelected);
   const storedUser = useAuthStore((s) => s.user);
@@ -140,6 +141,12 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
         : undefined,
     [conversationId, conversationsQuery.data],
   );
+  const groupCallInviteCandidates = conversation?.type === "group" && activeGroupCall && myUserId != null
+    && activeGroupCall.participants.some((participant) => participant.id === myUserId)
+    ? conversation.participants
+      .filter((participant) => participant.id !== myUserId && !activeGroupCall.participants.some((active) => active.id === participant.id))
+      .map((participant) => ({ id: participant.id, name: participant.display_name ?? participant.username ?? participant.phone ?? "Signal user" }))
+    : [];
 
   // Fetch messages for the active conversation.
   const messagesQuery = useQuery({
@@ -561,6 +568,8 @@ export function ChatPane({ showBackButton = false, onBack }: Props) {
         onGroupVideoCall={() => void startGroupCall(cid, conv.name ?? "Group call", conv.avatar_url ?? null, conv.participants.map((participant) => ({ id: participant.id, displayName: participant.display_name ?? participant.username ?? participant.phone ?? "Signal user", avatarUrl: participant.avatar_url })), "video")}
         showJoinGroupCall={conv.type === "group" && !!activeGroupCall && !activeGroupCall.participants.some((participant) => participant.id === myUserId)}
         onJoinGroupCall={() => { if (activeGroupCall) void joinGroupCall(activeGroupCall, conv.avatar_url); }}
+        groupCallInviteCandidates={groupCallInviteCandidates}
+        onInviteGroupCallMember={(userId) => { if (activeGroupCall) reinviteGroupCall(activeGroupCall, userId); }}
         onVoiceCall={() => {
           if (!otherParticipant) return;
           void startCall(
@@ -759,6 +768,8 @@ interface ChatHeaderProps {
   onGroupVideoCall: () => void;
   showJoinGroupCall: boolean;
   onJoinGroupCall: () => void;
+  groupCallInviteCandidates: Array<{ id: number; name: string }>;
+  onInviteGroupCallMember: (userId: number) => void;
   onVoiceCall: () => void;
   onVideoCall: () => void;
 }
@@ -782,9 +793,12 @@ function ChatHeader({
   onGroupVideoCall,
   showJoinGroupCall,
   onJoinGroupCall,
+  groupCallInviteCandidates,
+  onInviteGroupCallMember,
   onVoiceCall,
   onVideoCall,
 }: ChatHeaderProps) {
+  const [inviteMenuOpen, setInviteMenuOpen] = useState(false);
   return (
     <header
       className="flex min-w-0 items-center gap-2 border-b px-2 py-3 sm:gap-3 sm:px-4"
@@ -842,6 +856,12 @@ function ChatHeader({
         <Video size={18} />
       </IconBtn> : null}
       {showJoinGroupCall ? <button type="button" onClick={onJoinGroupCall} className="shrink-0 rounded-full bg-green-600 px-3 py-2 text-sm font-semibold text-white hover:bg-green-700 sm:px-4">Join call</button> : null}
+      {groupCallInviteCandidates.length ? <div className="relative">
+        <IconBtn aria-label="Invite a group member to the call" title="Invite a group member to the call" aria-expanded={inviteMenuOpen} onClick={() => setInviteMenuOpen((open) => !open)}><UserPlus size={18} /></IconBtn>
+        {inviteMenuOpen ? <div className="absolute right-0 top-full z-40 mt-2 max-h-64 w-60 overflow-y-auto rounded-xl border p-1 shadow-xl" style={{ backgroundColor: "var(--color-bg-primary)", borderColor: "var(--color-border-subtle)" }}>
+          {groupCallInviteCandidates.map((candidate) => <button key={candidate.id} type="button" onClick={() => { onInviteGroupCallMember(candidate.id); setInviteMenuOpen(false); }} className="block w-full rounded-lg px-3 py-2 text-left text-sm text-[var(--color-fg-primary)] hover:bg-[var(--color-bg-tertiary)]">Call {candidate.name} again</button>)}
+        </div> : null}
+      </div> : null}
       <IconBtn aria-label="Search in conversation" onClick={() => toast.info("Search in chat — coming soon")} className="hidden sm:flex">
         <Search size={18} />
       </IconBtn>

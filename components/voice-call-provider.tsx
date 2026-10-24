@@ -10,12 +10,12 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-import { Camera, CameraOff, Maximize2, Mic, MicOff, Minimize2, MonitorOff, MonitorUp, Phone, PhoneOff, PictureInPicture2, Signal, Video } from "lucide-react";
+import { Camera, CameraOff, Maximize2, Mic, MicOff, Minimize2, MonitorOff, MonitorUp, Phone, PhoneOff, PictureInPicture2, Signal, UserPlus, Video, X } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar } from "@/components/avatar";
 import { useAuthStore } from "@/store/auth";
 import { useRealtimeStore, type ActiveGroupCall } from "@/store/realtime";
-import { getIceServers, type IceServer } from "@/lib/api";
+import { createGroup, getIceServers, getQueryClient, listContacts, listConversations, queryKeys, type Contact, type IceServer } from "@/lib/api";
 import { isRealtimeConnected, sendCallSignal, subscribeToCallSignals, type CallSignal } from "@/lib/realtime";
 
 type CallState = {
@@ -23,6 +23,7 @@ type CallState = {
   conversationId: number;
   peerId: number;
   peerName: string;
+  inviterName: string | null;
   peerAvatarUrl: string | null;
   mediaType: "audio" | "video";
   direction: "incoming" | "outgoing";
@@ -49,12 +50,13 @@ type MiniCallCardProps = {
   onCamera: () => void;
   onScreenShare: () => void;
   isScreenSharing: boolean;
+  onAddPeople: () => void;
   onEnd: () => void;
   onAccept: () => void;
   onPictureInPicture: () => void;
 };
 
-function MiniCallCard({ call, participants, streams, duration, networkQuality, self, onRestore, onMute, onCamera, onScreenShare, isScreenSharing, onEnd, onAccept, onPictureInPicture }: MiniCallCardProps) {
+function MiniCallCard({ call, participants, streams, duration, networkQuality, self, onRestore, onMute, onCamera, onScreenShare, isScreenSharing, onAddPeople, onEnd, onAccept, onPictureInPicture }: MiniCallCardProps) {
   const cardRef = useRef<HTMLElement>(null);
   const dragRef = useRef<{ pointerId: number; startX: number; startY: number; left: number; top: number; moved: boolean } | null>(null);
   const resizeRef = useRef<{ pointerId: number; startX: number; startY: number; left: number; top: number; width: number; height: number } | null>(null);
@@ -181,6 +183,7 @@ function MiniCallCard({ call, participants, streams, duration, networkQuality, s
         <button type="button" onClick={onAccept} aria-label={`Answer ${isVideo ? "video" : "voice"} call`} className="flex h-10 w-10 items-center justify-center rounded-full bg-green-600 text-white hover:bg-green-700">{isVideo ? <Video size={18} /> : <Phone size={18} />}</button>
       </> : <>
         {isVideo ? <button type="button" onClick={onPictureInPicture} aria-label="Open video in picture-in-picture" title="Picture-in-picture" className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--color-bg-tertiary)] hover:brightness-95"><PictureInPicture2 size={18} /></button> : null}
+        {call.status === "active" ? <button type="button" onClick={onAddPeople} aria-label={call.isGroup ? "Invite a group member to the call" : "Add people to call"} title={call.isGroup ? "Invite a group member" : "Add people"} className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--color-bg-tertiary)] hover:brightness-95"><UserPlus size={18} /></button> : null}
         {isVideo ? <button type="button" onClick={onScreenShare} aria-label={isScreenSharing ? "Stop screen sharing" : "Share screen"} title={isScreenSharing ? "Stop screen sharing" : "Share screen"} className={`flex h-10 w-10 items-center justify-center rounded-full ${isScreenSharing ? "bg-[var(--color-accent)] text-white" : "bg-[var(--color-bg-tertiary)]"} hover:brightness-95`}>{isScreenSharing ? <MonitorOff size={18} /> : <MonitorUp size={18} />}</button> : null}
         <button type="button" onClick={onMute} aria-label={call.muted ? "Unmute microphone" : "Mute microphone"} title={call.muted ? "Unmute" : "Mute"} className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--color-bg-tertiary)] hover:brightness-95">{call.muted ? <MicOff size={18} /> : <Mic size={18} />}</button>
         {isVideo ? <button type="button" onClick={onCamera} aria-label={call.cameraOff ? "Turn camera on" : "Turn camera off"} title={call.cameraOff ? "Turn camera on" : "Turn camera off"} className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--color-bg-tertiary)] hover:brightness-95">{call.cameraOff ? <CameraOff size={18} /> : <Camera size={18} />}</button> : null}
@@ -197,6 +200,7 @@ type VoiceCallContextValue = {
   startCall: (conversationId: number, peerId: number, peerName: string, peerAvatarUrl?: string | null, mediaType?: "audio" | "video") => Promise<void>;
   startGroupCall: (conversationId: number, groupName: string, groupAvatarUrl: string | null, participants: Array<{ id: number; displayName: string; avatarUrl: string | null }>, mediaType: "audio" | "video") => Promise<void>;
   joinGroupCall: (active: ActiveGroupCall, groupAvatarUrl: string | null) => Promise<void>;
+  reinviteGroupCall: (active: ActiveGroupCall, userId: number) => void;
 };
 
 const VoiceCallContext = createContext<VoiceCallContextValue | null>(null);
@@ -206,6 +210,9 @@ const FALLBACK_ICE_SERVERS: IceServer[] = [
 ];
 
 function callStatusText(call: CallState, duration: string) {
+  if (call.status === "ringing" && call.direction === "incoming" && call.isGroup && call.inviterName) {
+    return `${call.inviterName} is inviting you to join this call`;
+  }
   if (call.status === "active") return duration;
   if (call.status === "reconnecting") return "Reconnecting…";
   if (call.status === "ringing") return call.direction === "incoming"
@@ -300,6 +307,13 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
   const [clock, setClock] = useState(0);
   const [networkQuality, setNetworkQuality] = useState<NetworkQuality>("checking");
   const [screenSharing, setScreenSharing] = useState(false);
+  const [addPeopleOpen, setAddPeopleOpen] = useState(false);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [groupInviteOptions, setGroupInviteOptions] = useState<Array<{ id: number; name: string; avatarUrl: string | null }>>([]);
+  const [addPeopleMode, setAddPeopleMode] = useState<"convert" | "reinvite">("convert");
+  const [selectedContactIds, setSelectedContactIds] = useState<number[]>([]);
+  const [loadingContacts, setLoadingContacts] = useState(false);
+  const [addingPeople, setAddingPeople] = useState(false);
 
   useEffect(() => {
     setClock(Date.now());
@@ -432,6 +446,8 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     const connections = [...peerConnectionsRef.current.values()];
     peerConnectionsRef.current.clear();
     updateCall(null);
+    setAddPeopleOpen(false);
+    setSelectedContactIds([]);
     connections.forEach((connection) => connection.close());
     screenStreamRef.current?.getTracks().forEach((track) => track.stop());
     screenStreamRef.current = null;
@@ -473,10 +489,12 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     });
     pc.onicecandidate = (event) => {
       if (!event.candidate) return;
+      const current = callRef.current;
+      if (!current || peerConnectionsRef.current.get(remoteUserId) !== pc) return;
       sendCallSignal({
         type: "call.ice",
-        call_id: session.callId,
-        conversation_id: session.conversationId,
+        call_id: current.callId,
+        conversation_id: current.conversationId,
         to_user_id: remoteUserId,
         candidate: event.candidate.toJSON(),
       });
@@ -487,13 +505,13 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     };
     pc.onconnectionstatechange = () => {
       const current = callRef.current;
-      if (!current || current.callId !== session.callId) return;
+      if (!current || peerConnectionsRef.current.get(remoteUserId) !== pc) return;
       if (pc.connectionState === "connected") {
         updateCall({ ...current, status: "active", startedAt: current.startedAt ?? Date.now() });
       } else if (pc.connectionState === "connecting" || pc.connectionState === "disconnected") {
         updateCall({ ...current, status: current.startedAt ? "reconnecting" : "connecting" });
       } else if (pc.connectionState === "failed" || pc.connectionState === "closed") {
-        if (session.isGroup) {
+        if (current.isGroup) {
           peerConnectionsRef.current.delete(remoteUserId);
           setRemoteStreams((streams) => { const next = { ...streams }; delete next[remoteUserId]; return next; });
         } else cleanup();
@@ -561,6 +579,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
         conversationId: signal.conversation_id,
         peerId: signal.from_user_id,
         peerName: signal.is_group ? signal.group_name || "Group call" : inviter.displayName,
+        inviterName: inviter.displayName,
         peerAvatarUrl: signal.from_avatar_url ?? null,
         mediaType: signal.media_type === "video" ? "video" : "audio",
         direction: "incoming",
@@ -570,7 +589,10 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
         cameraOff: false,
         peerCameraOff: false,
         isGroup: signal.is_group === true,
-        participants: signal.is_group ? [inviter] : [],
+        participants: signal.is_group
+          ? (signal.participants ?? [{ id: inviter.id, display_name: inviter.displayName, avatar_url: inviter.avatarUrl }])
+            .map((participant) => ({ id: participant.id, displayName: participant.display_name, avatarUrl: participant.avatar_url }))
+          : [],
         peerCameraOffById: {},
       });
       return;
@@ -585,7 +607,56 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
       return;
     }
     const current = callRef.current;
-    if (!current || !signal.call_id || signal.call_id !== current.callId) return;
+    if (!current || !signal.call_id) return;
+    if (signal.type === "call.upgraded" && signal.call_id === current.callId && !current.isGroup && signal.group_call_id && signal.group_conversation_id && signal.from_user_id) {
+      const participants = (signal.participants ?? [
+        { id: current.peerId, display_name: signal.from_name || current.peerName, avatar_url: current.peerAvatarUrl },
+      ]).map((participant) => ({
+        id: participant.id,
+        displayName: participant.display_name,
+        avatarUrl: participant.avatar_url,
+      }));
+      const groupSession: CallState = {
+        ...current,
+        callId: signal.group_call_id,
+        conversationId: signal.group_conversation_id,
+        peerId: signal.from_user_id,
+        peerName: signal.group_name || "Group call",
+        inviterName: null,
+        peerAvatarUrl: null,
+        mediaType: signal.media_type === "video" ? "video" : "audio",
+        status: "active",
+        startedAt: current.startedAt ?? Date.now(),
+        isGroup: true,
+        participants,
+        peerCameraOff: current.peerCameraOff,
+        peerCameraOffById: current.peerCameraOffById,
+      };
+      updateCall(groupSession);
+      return;
+    }
+    if (signal.call_id !== current.callId) return;
+
+    if (signal.type === "call.reinvite_sent") {
+      toast.success("Calling group member to join");
+      return;
+    }
+    if (signal.type === "call.reinvite_failed") {
+      toast.error(signal.message || "Could not reach that group member");
+      return;
+    }
+    if (signal.type === "call.invite_result") {
+      const delivered = signal.delivered_user_ids?.length ?? 0;
+      const offline = signal.offline_user_ids?.length ?? 0;
+      if (delivered === 0) toast.info("Your call continues, but the selected people are offline and could not be rung.");
+      else if (offline) toast.info(`Ringing ${delivered} member${delivered === 1 ? "" : "s"}; ${offline} offline.`);
+      else toast.success(`Ringing ${delivered} member${delivered === 1 ? "" : "s"} to join the call.`);
+      return;
+    }
+    if (current.isGroup && signal.type === "call.rejected") {
+      toast.info(`${signal.from_name || "A member"} declined the call`);
+      return;
+    }
 
     if (signal.type === "call.camera" && typeof signal.camera_off === "boolean" && signal.from_user_id) {
       updateCall({
@@ -810,7 +881,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
       return;
     }
     const session: CallState = {
-      callId: crypto.randomUUID(), conversationId, peerId, peerName, peerAvatarUrl,
+      callId: crypto.randomUUID(), conversationId, peerId, peerName, inviterName: null, peerAvatarUrl,
       mediaType, direction: "outgoing", status: "ringing", startedAt: null, muted: false, cameraOff: false, peerCameraOff: false,
       isGroup: false, participants: [], peerCameraOffById: {},
     };
@@ -846,7 +917,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     if (invitees.length > 8) { toast.error("Group calls currently support up to 9 people"); return; }
     const session: CallState = {
       callId: crypto.randomUUID(), conversationId, peerId: invitees[0].id,
-      peerName: groupName, peerAvatarUrl: groupAvatarUrl, mediaType,
+      peerName: groupName, inviterName: null, peerAvatarUrl: groupAvatarUrl, mediaType,
       direction: "outgoing", status: "ringing", startedAt: null,
       muted: false, cameraOff: false, peerCameraOff: false, isGroup: true,
       participants: self ? [{ id: self.id, displayName: self.display_name ?? self.username ?? "You", avatarUrl: self.avatar_url }] : [],
@@ -880,6 +951,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
       conversationId: active.conversation_id,
       peerId: active.caller_id || others[0].id,
       peerName: active.group_name,
+      inviterName: null,
       peerAvatarUrl: groupAvatarUrl,
       mediaType: active.media_type,
       direction: "incoming",
@@ -907,6 +979,128 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
       toast.error(error instanceof DOMException && error.name === "NotAllowedError" ? "Allow microphone and camera access to join" : "Couldn't join the call");
     }
   }, [cleanup, iceServers, self, updateCall]);
+
+  const reinviteGroupCall = useCallback((active: ActiveGroupCall, userId: number) => {
+    if (!self || !active.participants.some((participant) => participant.id === self.id)) {
+      toast.error("Join the call before inviting another member");
+      return;
+    }
+    if (active.participants.some((participant) => participant.id === userId)) {
+      toast.info("That member is already in the call");
+      return;
+    }
+    if (!sendCallSignal({
+      type: "call.reinvite", call_id: active.call_id,
+      conversation_id: active.conversation_id, to_user_id: userId,
+      media_type: active.media_type,
+      active_participant_ids: active.participants.map((participant) => participant.id),
+    })) toast.error("Call signaling is unavailable");
+  }, [self]);
+
+  async function openAddPeople() {
+    const current = callRef.current;
+    if (!current || current.status !== "active") return;
+    setAddPeopleOpen(true);
+    setLoadingContacts(true);
+    setSelectedContactIds([]);
+    try {
+      if (current.isGroup) {
+        setAddPeopleMode("reinvite");
+        const conversations = await listConversations();
+        const group = conversations.find((item) => item.id === current.conversationId);
+        setGroupInviteOptions((group?.participants ?? [])
+          .filter((member) => member.id !== self?.id && !current.participants.some((active) => active.id === member.id))
+          .map((member) => ({ id: member.id, name: member.display_name ?? member.username ?? member.phone ?? "Signal user", avatarUrl: member.avatar_url })));
+      } else {
+        setAddPeopleMode("convert");
+        setContacts(await listContacts());
+      }
+    } catch {
+      toast.error(current.isGroup ? "Could not load group members" : "Could not load your contacts");
+      setAddPeopleOpen(false);
+    } finally {
+      setLoadingContacts(false);
+    }
+  }
+
+  async function addPeopleToCall() {
+    const current = callRef.current;
+    if (!current || current.status !== "active" || !self) return;
+    if (!isRealtimeConnected()) { toast.error("Call signaling is unavailable. Reconnect before adding people."); return; }
+    if (addPeopleMode === "reinvite" && current.isGroup) {
+      const invitees = groupInviteOptions.filter((member) => selectedContactIds.includes(member.id));
+      if (!invitees.length) return;
+      setAddingPeople(true);
+      try {
+        const allSent = invitees.every((member) => sendCallSignal({
+          type: "call.reinvite", call_id: current.callId,
+          conversation_id: current.conversationId, to_user_id: member.id,
+          media_type: current.mediaType,
+          active_participant_ids: current.participants.map((participant) => participant.id),
+        }));
+        if (!allSent) throw new Error("Call signaling is unavailable");
+        setAddPeopleOpen(false);
+        setSelectedContactIds([]);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Could not invite group members");
+      } finally {
+        setAddingPeople(false);
+      }
+      return;
+    }
+    if (current.isGroup) return;
+    const selectedContacts = contacts.map((entry) => entry.contact).filter((contact) =>
+      selectedContactIds.includes(contact.id) && contact.id !== self.id && contact.id !== current.peerId,
+    );
+    if (!selectedContacts.length) return;
+    if (selectedContacts.length > 7) { toast.error("Group calls support up to 9 people"); return; }
+    setAddingPeople(true);
+    try {
+      const memberNames = [
+        self.display_name ?? self.username ?? "You",
+        current.peerName,
+        ...selectedContacts.map((contact) => contact.display_name ?? contact.username ?? contact.phone ?? "Signal user"),
+      ];
+      const groupName = memberNames.join(", ").slice(0, 128);
+      const conversation = await createGroup({
+        type: "group", name: groupName,
+        member_ids: [current.peerId, ...selectedContacts.map((contact) => contact.id)],
+        admin_ids: [current.peerId],
+      });
+      const groupCallId = crypto.randomUUID();
+      const durationSeconds = current.startedAt ? Math.floor((Date.now() - current.startedAt) / 1000) : 0;
+      if (!sendCallSignal({
+        type: "call.upgrade", call_id: current.callId,
+        conversation_id: current.conversationId, to_user_id: current.peerId,
+        group_call_id: groupCallId, group_conversation_id: conversation.id,
+        invitee_user_ids: selectedContacts.map((contact) => contact.id),
+        duration_seconds: durationSeconds,
+      })) throw new Error("Call signaling is unavailable");
+
+      const existingPeer = current.participants?.find((participant) => participant.id === current.peerId);
+      updateCall({
+        ...current, callId: groupCallId, conversationId: conversation.id,
+        peerName: groupName, peerAvatarUrl: conversation.avatar_url,
+        status: "active", startedAt: current.startedAt ?? Date.now(),
+        isGroup: true,
+        participants: [
+          { id: self.id, displayName: self.display_name ?? self.username ?? "You", avatarUrl: self.avatar_url },
+          ...(existingPeer ? [existingPeer] : [{ id: current.peerId, displayName: current.peerName, avatarUrl: current.peerAvatarUrl }]),
+        ],
+        peerCameraOff: current.peerCameraOff,
+        peerCameraOffById: current.peerCameraOffById,
+      });
+      setAddPeopleOpen(false);
+      setSelectedContactIds([]);
+      setCallMinimized(false);
+      void getQueryClient().invalidateQueries({ queryKey: queryKeys.conversations });
+      toast.success("Group created. Your call is moving to the new group.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not create the group call");
+    } finally {
+      setAddingPeople(false);
+    }
+  }
 
   async function acceptCall() {
     const current = callRef.current;
@@ -1013,7 +1207,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
     : [];
 
   return (
-    <VoiceCallContext.Provider value={{ call, startCall, startGroupCall, joinGroupCall }}>
+    <VoiceCallContext.Provider value={{ call, startCall, startGroupCall, joinGroupCall, reinviteGroupCall }}>
       {children}
       {Object.entries(remoteStreams).map(([userId, stream]) => <RemoteAudio
         key={`audio-${userId}`}
@@ -1022,7 +1216,7 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
         audioElements={remoteAudioElementsRef.current}
         onPlaybackBlocked={setAudioNeedsInteraction}
       />)}
-      {call?.mediaType === "video" ? callMinimized ? <MiniCallCard call={call} participants={remoteParticipants} streams={remoteStreams} duration={duration} networkQuality={networkQuality} self={self} onRestore={() => setCallMinimized(false)} onMute={toggleMute} onCamera={toggleCamera} onScreenShare={() => void toggleScreenShare()} isScreenSharing={screenSharing} onEnd={declineOrEnd} onAccept={() => void acceptCall()} onPictureInPicture={() => void togglePictureInPicture()} /> : <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black p-3 sm:p-6" role="presentation">
+      {call?.mediaType === "video" ? callMinimized ? <MiniCallCard call={call} participants={remoteParticipants} streams={remoteStreams} duration={duration} networkQuality={networkQuality} self={self} onRestore={() => setCallMinimized(false)} onMute={toggleMute} onCamera={toggleCamera} onScreenShare={() => void toggleScreenShare()} isScreenSharing={screenSharing} onAddPeople={() => void openAddPeople()} onEnd={declineOrEnd} onAccept={() => void acceptCall()} onPictureInPicture={() => void togglePictureInPicture()} /> : <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black p-3 sm:p-6" role="presentation">
         <section role="dialog" aria-modal="true" aria-label="Video call" className="relative h-full max-h-[min(82vh,900px)] w-full max-w-5xl overflow-hidden rounded-3xl bg-neutral-950 text-white shadow-2xl">
           <div className="absolute inset-0 grid gap-3 p-3 sm:p-5" style={{ gridTemplateColumns: `repeat(${Math.max(1, Math.ceil(Math.sqrt(remoteParticipants.length || 1)))}, minmax(0, 1fr))` }}>
             {remoteParticipants.map((participant) => {
@@ -1041,13 +1235,13 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
           </div>}
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/35 via-transparent to-black/45" />
           <div className="absolute left-5 top-5 z-10"><h2 className="text-xl font-semibold">{call.peerName}</h2><p aria-live="polite" className="text-sm text-white/80">{callStatusText(call, duration)}</p><ConnectionQuality quality={networkQuality} /></div>
-          <div className="absolute right-5 top-5 z-20 flex gap-2"><button type="button" onClick={() => void togglePictureInPicture()} aria-label="Open video in picture-in-picture" title="Picture-in-picture" className="rounded-xl bg-white/15 p-2.5 text-white transition hover:bg-white/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"><PictureInPicture2 size={19} /></button><button type="button" onClick={() => setCallMinimized(true)} aria-label="Minimize call and return to chat" title="Minimize call" className="rounded-xl bg-white/15 p-2.5 text-white transition hover:bg-white/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"><Minimize2 size={19} /></button></div>
+          <div className="absolute right-5 top-5 z-20 flex gap-2">{call.status === "active" ? <button type="button" onClick={() => void openAddPeople()} aria-label={call.isGroup ? "Invite a group member to the call" : "Add people to call"} title={call.isGroup ? "Invite a group member" : "Add people"} className="rounded-xl bg-white/15 p-2.5 text-white transition hover:bg-white/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"><UserPlus size={19} /></button> : null}<button type="button" onClick={() => void togglePictureInPicture()} aria-label="Open video in picture-in-picture" title="Picture-in-picture" className="rounded-xl bg-white/15 p-2.5 text-white transition hover:bg-white/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"><PictureInPicture2 size={19} /></button><button type="button" onClick={() => setCallMinimized(true)} aria-label="Minimize call and return to chat" title="Minimize call" className="rounded-xl bg-white/15 p-2.5 text-white transition hover:bg-white/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"><Minimize2 size={19} /></button></div>
           {audioNeedsInteraction ? <button onClick={() => void enableCallAudio()} className="absolute left-1/2 top-5 z-20 -translate-x-1/2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-black shadow-lg hover:bg-white/90">Tap to enable audio</button> : null}
           <div className="absolute bottom-6 left-1/2 z-20 flex -translate-x-1/2 items-center gap-4 rounded-full bg-black/45 px-5 py-3 backdrop-blur-md">
             {call.direction === "incoming" && call.status === "ringing" ? <><button onClick={declineOrEnd} aria-label="Decline call" className="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 hover:bg-red-700"><PhoneOff size={22} /></button><button onClick={() => void acceptCall()} aria-label="Answer video call" className="flex h-14 w-14 items-center justify-center rounded-full bg-green-600 hover:bg-green-700"><Video size={22} /></button></> : <><button onClick={toggleMute} aria-label={call.muted ? "Unmute microphone" : "Mute microphone"} className="flex h-12 w-12 items-center justify-center rounded-full bg-white/15 hover:bg-white/25">{call.muted ? <MicOff size={21} /> : <Mic size={21} />}</button><button onClick={() => void toggleScreenShare()} aria-label={screenSharing ? "Stop screen sharing" : "Share screen"} title={screenSharing ? "Stop screen sharing" : "Share screen"} className={`flex h-12 w-12 items-center justify-center rounded-full ${screenSharing ? "bg-[var(--color-accent)]" : "bg-white/15 hover:bg-white/25"}`}>{screenSharing ? <MonitorOff size={21} /> : <MonitorUp size={21} />}</button><button onClick={toggleCamera} aria-label={call.cameraOff ? "Turn camera on" : "Turn camera off"} className="flex h-12 w-12 items-center justify-center rounded-full bg-white/15 hover:bg-white/25">{call.cameraOff ? <CameraOff size={21} /> : <Camera size={21} />}</button><button onClick={declineOrEnd} aria-label="Leave call" className="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 hover:bg-red-700"><PhoneOff size={22} /></button></>}
           </div>
         </section>
-      </div> : call ? callMinimized ? <MiniCallCard call={call} participants={remoteParticipants} streams={remoteStreams} duration={duration} networkQuality={networkQuality} self={self} onRestore={() => setCallMinimized(false)} onMute={toggleMute} onCamera={toggleCamera} onScreenShare={() => void toggleScreenShare()} isScreenSharing={screenSharing} onEnd={declineOrEnd} onAccept={() => void acceptCall()} onPictureInPicture={() => void togglePictureInPicture()} /> : <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm" role="presentation">
+      </div> : call ? callMinimized ? <MiniCallCard call={call} participants={remoteParticipants} streams={remoteStreams} duration={duration} networkQuality={networkQuality} self={self} onRestore={() => setCallMinimized(false)} onMute={toggleMute} onCamera={toggleCamera} onScreenShare={() => void toggleScreenShare()} isScreenSharing={screenSharing} onAddPeople={() => void openAddPeople()} onEnd={declineOrEnd} onAccept={() => void acceptCall()} onPictureInPicture={() => void togglePictureInPicture()} /> : <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm" role="presentation">
         <section role="dialog" aria-modal="true" aria-label="Voice call" className="w-full max-w-sm rounded-3xl border p-7 text-center shadow-2xl" style={{ backgroundColor: "var(--color-bg-primary)", borderColor: "var(--color-border-subtle)" }}>
           {call.isGroup ? <div className="mx-auto mb-4 flex -space-x-3 justify-center">{remoteParticipants.slice(0, 4).map((participant) => <Avatar key={participant.id} subject={{ avatar_url: participant.avatarUrl, display_name: participant.displayName }} size={52} showOnline={false} />)}</div> : <div className="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full ring-4 ring-[var(--color-bg-tertiary)]" style={{ boxShadow: call.status === "active" ? "0 0 0 6px rgb(22 163 74 / 15%)" : undefined }}><Avatar subject={{ avatar_url: call.peerAvatarUrl, display_name: call.peerName }} size={88} showOnline={false} /></div>}
           <div className="flex items-start justify-center gap-3"><div><h2 className="text-xl font-semibold text-[var(--color-fg-primary)]">{call.peerName}</h2>
@@ -1055,8 +1249,34 @@ export function VoiceCallProvider({ children }: { children: ReactNode }) {
           {call.isGroup && remoteParticipants.length ? <div className="mt-4 flex flex-wrap justify-center gap-2">{remoteParticipants.map((participant) => <span key={participant.id} className="rounded-full bg-[var(--color-bg-tertiary)] px-3 py-1 text-xs text-[var(--color-fg-secondary)]">{participant.displayName}</span>)}</div> : null}
           {audioNeedsInteraction ? <button onClick={() => void enableCallAudio()} className="mt-5 rounded-full bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-white">Tap to enable audio</button> : null}
           <div className="mt-8 flex items-center justify-center gap-5">
-            {call.direction === "incoming" && call.status === "ringing" ? <><button onClick={declineOrEnd} aria-label="Decline call" className="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 text-white hover:bg-red-700"><PhoneOff size={22} /></button><button onClick={() => void acceptCall()} aria-label="Answer call" className="flex h-14 w-14 items-center justify-center rounded-full bg-green-600 text-white hover:bg-green-700"><Phone size={22} /></button></> : <><button onClick={toggleMute} aria-label={call.muted ? "Unmute microphone" : "Mute microphone"} className="flex h-12 w-12 items-center justify-center rounded-full text-[var(--color-fg-primary)] hover:bg-[var(--color-bg-tertiary)]">{call.muted ? <MicOff size={21} /> : <Mic size={21} />}</button><button onClick={declineOrEnd} aria-label="Leave call" className="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 text-white hover:bg-red-700"><PhoneOff size={22} /></button></>}
+            {call.direction === "incoming" && call.status === "ringing" ? <><button onClick={declineOrEnd} aria-label="Decline call" className="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 text-white hover:bg-red-700"><PhoneOff size={22} /></button><button onClick={() => void acceptCall()} aria-label="Answer call" className="flex h-14 w-14 items-center justify-center rounded-full bg-green-600 text-white hover:bg-green-700"><Phone size={22} /></button></> : <>{call.status === "active" ? <button onClick={() => void openAddPeople()} aria-label={call.isGroup ? "Invite a group member to the call" : "Add people to call"} title={call.isGroup ? "Invite a group member" : "Add people"} className="flex h-12 w-12 items-center justify-center rounded-full text-[var(--color-fg-primary)] hover:bg-[var(--color-bg-tertiary)]"><UserPlus size={21} /></button> : null}<button onClick={toggleMute} aria-label={call.muted ? "Unmute microphone" : "Mute microphone"} className="flex h-12 w-12 items-center justify-center rounded-full text-[var(--color-fg-primary)] hover:bg-[var(--color-bg-tertiary)]">{call.muted ? <MicOff size={21} /> : <Mic size={21} />}</button><button onClick={declineOrEnd} aria-label="Leave call" className="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 text-white hover:bg-red-700"><PhoneOff size={22} /></button></>}
           </div>
+        </section>
+      </div> : null}
+      {addPeopleOpen ? <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAddPeopleOpen(false); }}>
+        <section role="dialog" aria-modal="true" aria-labelledby="add-call-people-title" className="w-full max-w-md rounded-2xl border p-5 shadow-2xl" style={{ backgroundColor: "var(--color-bg-primary)", borderColor: "var(--color-border-subtle)" }}>
+          <div className="flex items-center justify-between"><div><h2 id="add-call-people-title" className="text-lg font-semibold text-[var(--color-fg-primary)]">{addPeopleMode === "reinvite" ? "Invite people to the call" : "Add people to this call"}</h2><p className="mt-1 text-sm text-[var(--color-fg-secondary)]">{addPeopleMode === "reinvite" ? "Call a group member who has not joined yet." : "This will create a group chat and move your call there."}</p></div><button type="button" onClick={() => setAddPeopleOpen(false)} aria-label="Close" className="rounded-lg p-2 text-[var(--color-fg-secondary)] hover:bg-[var(--color-bg-tertiary)]"><X size={18} /></button></div>
+          <div className="mt-4 max-h-72 overflow-y-auto">
+            {loadingContacts ? <p className="py-8 text-center text-sm text-[var(--color-fg-secondary)]">Loading people…</p> : addPeopleMode === "reinvite" ? groupInviteOptions.length === 0 ? <p className="py-8 text-center text-sm text-[var(--color-fg-secondary)]">Everyone in this group is already on the call.</p> : groupInviteOptions.map((member) => {
+              const selected = selectedContactIds.includes(member.id);
+              const maxSelected = Math.max(0, 9 - (call?.participants.length ?? 1));
+              return <label key={member.id} className="flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 hover:bg-[var(--color-bg-tertiary)]">
+                <input type="checkbox" checked={selected} disabled={!selected && selectedContactIds.length >= maxSelected} onChange={() => setSelectedContactIds((ids) => selected ? ids.filter((id) => id !== member.id) : [...ids, member.id])} className="h-4 w-4 accent-[var(--color-accent)]" />
+                <Avatar subject={{ avatar_url: member.avatarUrl, display_name: member.name }} size={38} showOnline={false} />
+                <span className="min-w-0 flex-1 truncate text-sm text-[var(--color-fg-primary)]">{member.name}</span>
+              </label>;
+            }) : contacts.filter((entry) => entry.contact.id !== self?.id && entry.contact.id !== call?.peerId).length === 0 ? <p className="py-8 text-center text-sm text-[var(--color-fg-secondary)]">No contacts available to add.</p> : contacts.filter((entry) => entry.contact.id !== self?.id && entry.contact.id !== call?.peerId).map(({ contact }) => {
+              const selected = selectedContactIds.includes(contact.id);
+              const name = contact.display_name ?? contact.username ?? contact.phone ?? "Signal user";
+              return <label key={contact.id} className="flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 hover:bg-[var(--color-bg-tertiary)]">
+                <input type="checkbox" checked={selected} disabled={!selected && selectedContactIds.length >= 7} onChange={() => setSelectedContactIds((ids) => selected ? ids.filter((id) => id !== contact.id) : [...ids, contact.id])} className="h-4 w-4 accent-[var(--color-accent)]" />
+                <Avatar subject={{ avatar_url: contact.avatar_url, display_name: name }} size={38} showOnline={false} />
+                <span className="min-w-0 flex-1 truncate text-sm text-[var(--color-fg-primary)]">{name}</span>
+              </label>;
+            })}
+          </div>
+          <p className="mt-2 text-xs text-[var(--color-fg-secondary)]">{selectedContactIds.length} selected{addPeopleMode === "convert" ? " · 9 people maximum, including you and your current caller." : ""}</p>
+          <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setAddPeopleOpen(false)} className="rounded-lg px-4 py-2 text-sm text-[var(--color-fg-secondary)] hover:bg-[var(--color-bg-tertiary)]">Cancel</button><button type="button" disabled={addingPeople || loadingContacts || selectedContactIds.length === 0} onClick={() => void addPeopleToCall()} className="rounded-lg bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{addingPeople ? (addPeopleMode === "reinvite" ? "Calling…" : "Creating group…") : (addPeopleMode === "reinvite" ? "Call selected members" : "Create group call")}</button></div>
         </section>
       </div> : null}
     </VoiceCallContext.Provider>

@@ -470,6 +470,7 @@ export interface CreateGroupBody {
   type: "group";
   name: string;
   member_ids: number[];
+  admin_ids?: number[];
   avatar_url?: string;
 }
 export interface CreateGroupResponse {
