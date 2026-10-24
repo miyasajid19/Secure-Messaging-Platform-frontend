@@ -390,6 +390,11 @@ function handlePresenceSnapshot(msg: PresenceSnapshot) {
   // ready. Mark wsReady so the composer can stop disabling the send
   // button (Phase 6 spec §1 — UI-send race fix).
   useRealtimeStore.getState().setWsReady(true);
+  // Reconcile active timelines after every connection/reconnection so
+  // messages missed while the socket was unavailable appear immediately.
+  const qc = getQueryClient();
+  void qc.invalidateQueries({ queryKey: ["messages"], refetchType: "active" });
+  void qc.invalidateQueries({ queryKey: queryKeys.conversations });
 }
 
 function handlePresence(msg: Presence) {
@@ -435,20 +440,76 @@ function handleMessageNew(msg: MessageNew) {
       }
     }
   }
-  void qc.invalidateQueries({ queryKey: queryKeys.conversations });
+  const myUserId = useAuthStore.getState().user?.id ?? null;
+  const isUnread = !isDuplicate &&
+    myUserId != null &&
+    m.sender_id !== myUserId &&
+    useUiStore.getState().selectedConversationId !== m.conversation_id;
+  updateConversationLastMessage(m, { incrementUnread: isUnread });
 }
 
 function handleMessageUpdated(msg: MessageUpdated) {
   const qc = getQueryClient();
   const updated = normalizeIncoming(msg.message);
   if (!updated) return;
+  const cached = qc.getQueryData<Message[]>(queryKeys.messages(updated.conversation_id));
   qc.setQueryData<Message[]>(
     queryKeys.messages(updated.conversation_id),
     (prev) => prev?.map((message) => message.id === updated.id
       ? { ...message, ...updated, status: message.status ?? updated.status }
       : message),
   );
-  void qc.invalidateQueries({ queryKey: queryKeys.conversations });
+  if (!cached?.some((message) => message.id === updated.id)) {
+    void qc.invalidateQueries({
+      queryKey: queryKeys.messages(updated.conversation_id),
+      refetchType: "active",
+    });
+  }
+  updateConversationLastMessage(updated, { incrementUnread: false });
+}
+
+function updateConversationLastMessage(
+  message: Message,
+  options: { incrementUnread: boolean },
+) {
+  const qc = getQueryClient();
+  const conversations = qc.getQueryData<Conversation[]>(queryKeys.conversations);
+  if (!conversations?.some((conversation) => conversation.id === message.conversation_id)) {
+    void qc.invalidateQueries({ queryKey: queryKeys.conversations });
+    return;
+  }
+
+  qc.setQueryData<Conversation[]>(queryKeys.conversations, (previous) => {
+    if (!previous) return previous;
+    const next = previous.map((conversation) => {
+      if (conversation.id !== message.conversation_id) return conversation;
+      const previousMessage = conversation.last_message;
+      const messageIsOlder = previousMessage &&
+        (Date.parse(previousMessage.created_at) > Date.parse(message.created_at) ||
+          (previousMessage.created_at === message.created_at && previousMessage.id > message.id));
+      if (messageIsOlder) return conversation;
+      return {
+        ...conversation,
+        last_message: {
+          id: message.id,
+          sender_id: message.sender_id,
+          content: message.is_deleted ? "Message deleted" : message.content,
+          created_at: message.created_at,
+          type: message.type,
+          is_deleted: message.is_deleted,
+          forwarded: message.forwarded,
+        },
+        last_message_at: message.created_at,
+        unread_count: options.incrementUnread
+          ? conversation.unread_count + 1
+          : conversation.unread_count,
+      };
+    });
+    return next.sort((left, right) =>
+      Date.parse(right.last_message_at ?? right.created_at) -
+      Date.parse(left.last_message_at ?? left.created_at),
+    );
+  });
 }
 
 function handleMessageReadBulk(msg: MessageReadBulk) {
@@ -467,7 +528,19 @@ function handleMessageReadBulk(msg: MessageReadBulk) {
 }
 
 function handleMessageDelivered(msg: MessageDelivered) {
-  void syncMessageStatuses(msg.conversation_id);
+  const qc = getQueryClient();
+  qc.setQueryData<Message[]>(
+    queryKeys.messages(msg.conversation_id),
+    (previous) => {
+      if (!previous) return previous;
+      return previous.map((message) => {
+        if (message.id !== msg.message_id || message.status === "read" || message.status === "delivered") {
+          return message;
+        }
+        return { ...message, status: "delivered" };
+      });
+    },
+  );
 }
 
 function handleMessageRead(msg: MessageRead) {
